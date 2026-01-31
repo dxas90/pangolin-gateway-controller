@@ -54,7 +54,7 @@ spec:
     app: api
   ports:
     - port: 8080
-      targetPort: 8080
+      targetPort: 5678
       protocol: TCP
 
 ---
@@ -64,7 +64,7 @@ metadata:
   name: api
   namespace: default
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: api
@@ -79,7 +79,7 @@ spec:
           args:
             - "-text=API Response"
           ports:
-            - containerPort: 8080
+            - containerPort: 5678
           resources:
             limits:
               cpu: "100m"
