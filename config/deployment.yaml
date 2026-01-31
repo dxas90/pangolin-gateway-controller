@@ -1,0 +1,158 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pangolin-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pangolin-gateway-controller-config
+  namespace: pangolin-system
+data:
+  config.yaml: |
+    pangolin:
+      apiKey: ""  # Set this via Secret or environment variable
+      orgId: ""   # Set this via Secret or environment variable
+      baseUrl: "https://api.pangolin.net/v1"
+
+    controller:
+      gatewayClassName: "pangolin"
+      namespace: ""  # Watch all namespaces
+      metricsBindAddress: ":8080"
+      healthProbeBindAddress: ":8081"
+      leaderElection: true
+      leaderElectionId: "pangolin-gateway-controller-leader"
+      leaderElectionNamespace: "pangolin-system"
+
+    logging:
+      level: "info"
+      format: "json"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pangolin-api-credentials
+  namespace: pangolin-system
+type: Opaque
+stringData:
+  apiKey: "YOUR_PANGOLIN_API_KEY_HERE"
+  orgId: "YOUR_PANGOLIN_ORG_ID_HERE"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pangolin-gateway-controller
+  namespace: pangolin-system
+  labels:
+    app: pangolin-gateway-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pangolin-gateway-controller
+  template:
+    metadata:
+      labels:
+        app: pangolin-gateway-controller
+    spec:
+      serviceAccountName: pangolin-gateway-controller
+      containers:
+        - name: controller
+          image: pangolin-gateway-controller:latest
+          imagePullPolicy: Never
+          command:
+            - /controller
+          args:
+            - --env-config
+          env:
+            - name: PANGOLIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-api-credentials
+                  key: api-key
+            - name: PANGOLIN_ORG_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-api-credentials
+                  key: org-id
+            - name: PANGOLIN_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-api-credentials
+                  key: base-url
+            - name: ENABLE_LEADER_ELECTION
+              value: "true"
+            - name: GATEWAY_CLASS_NAME
+              value: "pangolin"
+            - name: WATCH_NAMESPACE
+              value: ""
+            - name: METRICS_BIND_ADDRESS
+              value: ":8080"
+            - name: HEALTH_PROBE_BIND_ADDRESS
+              value: ":8081"
+            - name: LEADER_ELECTION_ID
+              value: "pangolin-gateway-controller-leader"
+            - name: LEADER_ELECTION_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: LOG_LEVEL
+              value: "info"
+            - name: LOG_FORMAT
+              value: "json"
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pangolin-gateway-controller-metrics
+  namespace: pangolin-system
+  labels:
+    app: pangolin-gateway-controller
+spec:
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app: pangolin-gateway-controller

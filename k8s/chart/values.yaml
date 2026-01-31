@@ -1,0 +1,127 @@
+replicaCount: 1
+
+image:
+  repository: "dxas90/pangolin-gateway-controller"
+  pullPolicy: "Always"
+  tag: "latest"
+
+service:
+  type: "ClusterIP"
+  port: 8080
+  annotations: {}
+
+chart_label: "pangolin-gateway-controller"
+
+namespace: "default"
+
+httproute:
+  enabled: False
+  gatewayName: "gateway"
+  gatewayNamespace: "gateway-system"
+  sectionName: "http"
+  annotations: {}
+    # external-dns.alpha.kubernetes.io/target: "gateway.example.com"
+  labels: {}
+    # use-cloudflare-solver: "true"
+  hostnames:
+    - "example.local"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - port: 8080
+
+persistence:
+  enabled: False
+  capacity: "8Mi"
+  mountPath: "/data"
+
+autoscaling:
+  enabled: False
+  minReplicas: 1
+  maxReplicas: 10
+
+resources:
+  limits:
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 512Mi
+
+chart:
+  label: "pangolin-gateway-controller"
+
+# Environment configuration
+env:
+  # Environment variables from file will be loaded here during chart generation
+  # if env_file_path is provided in cookiecutter.json
+  variables:
+    APP_ENV: "production"
+    TMPDIR: "/tmp"
+
+# Environment configuration as a config map
+# Extra environment variables that will be included in the ConfigMap and injected
+# into the container via envFrom. Useful for setting JVM options when root FS is
+# mounted read-only (for example: override go.io.tmpdir to a writable emptyDir)
+extraEnv:
+  PORT: "8080"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "tempo.observability.svc.cluster.local:4317"
+
+# Common secret and settings references
+common:
+  secrets:
+    enabled: False
+    name: "common-secrets"
+  settings:
+    enabled: False
+    name: "common-settings"
+
+# Other values from the original chart are intentionally left as defaults.
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# Added to the deployment spec template
+imagePullSecrets: []
+
+podSecurityContext:
+  # Aligns with the non-root user created in the Docker image (gid: 1001)
+  fsGroup: 1001
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1001
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  failureThreshold: 3
+  timeoutSeconds: 5
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  failureThreshold: 3
+  timeoutSeconds: 5
+
+volumeMounts:
+  - name: app-cache
+    mountPath: /var/cache/app
+
+volumes:
+  - name: app-cache
+    emptyDir: {}

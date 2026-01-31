@@ -1,0 +1,125 @@
+suite: test deployment
+templates:
+  - deployment.yaml
+tests:
+  - it: should create deployment with default values
+    set:
+      autoscaling.enabled: false
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-pangolin-gateway-controller
+      - equal:
+          path: metadata.labels["app.kubernetes.io/part-of"]
+          value: pangolin-gateway-controller
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "dxas90/pangolin-gateway-controller:latest"
+
+  - it: should not set replicas when autoscaling is enabled
+    set:
+      autoscaling.enabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - isNull:
+          path: spec.replicas
+
+  - it: should set custom replica count
+    set:
+      replicaCount: 3
+      autoscaling.enabled: false
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  - it: should use custom image tag
+    set:
+      image.tag: "v1.2.3"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "dxas90/pangolin-gateway-controller:v1.2.3"
+
+  - it: should set resource limits and requests
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 512Mi
+
+  - it: should configure http based liveness and readiness probes
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz
+
+  - it: should include environment variables
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+
+  - it: should set security context values for the container
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 1001
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: false
+
+  - it: should apply custom labels
+    set:
+      podLabels:
+        custom-label: custom-value
+    asserts:
+      - isSubset:
+          path: spec.template.metadata.labels
+          content:
+            custom-label: custom-value
+
+  - it: should apply custom annotations
+    set:
+      podAnnotations:
+        custom-annotation: custom-value
+    asserts:
+      - equal:
+            path: spec.template.metadata.annotations.custom-annotation
+            value: custom-value
+
+  - it: should mount /tmp as an emptyDir when readOnlyRootFilesystem is enabled
+    set:
+      securityContext.readOnlyRootFilesystem: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: app-cache
+            mountPath: /var/cache/app
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: app-cache
+            emptyDir: {}

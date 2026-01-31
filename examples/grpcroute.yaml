@@ -1,0 +1,37 @@
+# Example GRPCRoute for TCP/UDP services
+# Use annotation gateway.pangolin.net/protocol to specify tcp or udp (default: tcp)
+
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: GRPCRoute
+metadata:
+  name: example-grpc
+  namespace: default
+  annotations:
+    gateway.pangolin.net/protocol: "tcp"  # or "udp"
+spec:
+  parentRefs:
+    - name: example-gateway
+  hostnames:
+    - "grpc.example.com"
+  rules:
+    - backendRefs:
+        - name: grpc-service
+          port: 50051
+---
+# Example for UDP service
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: GRPCRoute
+metadata:
+  name: example-udp
+  namespace: default
+  annotations:
+    gateway.pangolin.net/protocol: "udp"
+spec:
+  parentRefs:
+    - name: example-gateway
+  hostnames:
+    - "udp.example.com"
+  rules:
+    - backendRefs:
+        - name: udp-service
+          port: 5353

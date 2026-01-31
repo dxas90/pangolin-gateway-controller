@@ -1,0 +1,17 @@
+# https://ahmet.im/blog/kubernetes-network-policy/
+---
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: {{ include "base.fullname" . }}
+  labels:
+{{ include "base.labels" $ | indent 4 }}
+{{- with .Values.httproute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  podSelector:
+    matchLabels: {}
+  ingress:
+    - {}

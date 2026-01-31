@@ -1,0 +1,42 @@
+# Example HTTPRoute with path-based routing
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-httproute
+  namespace: default
+spec:
+  parentRefs:
+    - name: example-gateway
+  hostnames:
+    - "www.example.com"
+  rules:
+    # Route /api/* to API service
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: api-service
+          port: 8080
+
+    # Route /admin/* to admin service with header check
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /admin
+          headers:
+            - name: X-Admin-Token
+              value: secret-token
+      backendRefs:
+        - name: admin-service
+          port: 8080
+
+    # Default route to web service
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: web-service
+          port: 80

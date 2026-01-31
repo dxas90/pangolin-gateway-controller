@@ -1,0 +1,165 @@
+package main
+
+import (
+	"flag"
+	"os"
+
+	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
+	"github.com/dxas90/pangolin-gateway-controller/pkg/controller"
+	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+)
+
+var (
+	scheme   = runtime.NewScheme()
+	setupLog = ctrl.Log.WithName("setup")
+)
+
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
+}
+
+func main() {
+	var configFile string
+	var useEnvConfig bool
+
+	flag.StringVar(&configFile, "config", "", "Path to configuration file")
+	flag.BoolVar(&useEnvConfig, "env-config", false, "Load configuration from environment variables")
+	flag.Parse()
+
+	// Load configuration
+	var cfg *config.Config
+	var err error
+
+	if useEnvConfig || configFile == "" {
+		setupLog.Info("Loading configuration from environment variables")
+		cfg, err = config.LoadFromEnv()
+	} else {
+		setupLog.Info("Loading configuration from file", "path", configFile)
+		cfg, err = config.LoadConfig(configFile)
+	}
+
+	if err != nil {
+		setupLog.Error(err, "Failed to load configuration")
+		os.Exit(1)
+	}
+
+	// Setup logging
+	opts := zap.Options{
+		Development: cfg.Logging.Level == "debug",
+	}
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	setupLog.Info("Starting Pangolin Gateway Controller",
+		"version", "v0.1.0",
+		"gatewayClass", cfg.Controller.GatewayClassName,
+		"pangolinOrgID", cfg.Pangolin.OrgID,
+	)
+
+	// Create Pangolin client
+	pangolinClient := pangolin.NewClient(cfg.Pangolin.APIKey, cfg.Pangolin.OrgID)
+	if cfg.Pangolin.BaseURL != "" {
+		pangolinClient.BaseURL = cfg.Pangolin.BaseURL
+	}
+
+	// Setup manager
+	mgrOpts := ctrl.Options{
+		Scheme:                  scheme,
+		Metrics:                 server.Options{BindAddress: cfg.Controller.MetricsBindAddress},
+		HealthProbeBindAddress:  cfg.Controller.HealthProbeBindAddress,
+		LeaderElection:          cfg.Controller.LeaderElection,
+		LeaderElectionID:        cfg.Controller.LeaderElectionID,
+		LeaderElectionNamespace: cfg.Controller.LeaderElectionNamespace,
+	}
+
+	// Configure namespace watching if specified
+	if cfg.Controller.Namespace != "" {
+		mgrOpts.Cache = cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				cfg.Controller.Namespace: {},
+			},
+		}
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOpts)
+	if err != nil {
+		setupLog.Error(err, "Failed to create manager")
+		os.Exit(1)
+	}
+
+	// Setup Gateway controller
+	if err = (&controller.GatewayReconciler{
+		Client:          mgr.GetClient(),
+		Log:             ctrl.Log.WithName("controllers").WithName("Gateway"),
+		Scheme:          mgr.GetScheme(),
+		PangolinClient:  pangolinClient,
+		ControllerClass: cfg.Controller.GatewayClassName,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create Gateway controller")
+		os.Exit(1)
+	}
+
+	// Setup HTTPRoute controller
+	if err = (&controller.HTTPRouteReconciler{
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("HTTPRoute"),
+		Scheme:         mgr.GetScheme(),
+		PangolinClient: pangolinClient,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create HTTPRoute controller")
+		os.Exit(1)
+	}
+
+	// Setup GRPCRoute controller for TCP/UDP services
+	if err = (&controller.GRPCRouteReconciler{
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("GRPCRoute"),
+		Scheme:         mgr.GetScheme(),
+		PangolinClient: pangolinClient,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create GRPCRoute controller")
+		os.Exit(1)
+	}
+
+	// Setup Newt controller to deploy newt instances for Gateways
+	if err = (&controller.NewtReconciler{
+		Client:          mgr.GetClient(),
+		Log:             ctrl.Log.WithName("controllers").WithName("Newt"),
+		Scheme:          mgr.GetScheme(),
+		PangolinClient:  pangolinClient,
+		PangolinBaseURL: cfg.Pangolin.BaseURL,
+		NewtEndpoint:    cfg.Controller.NewtEndpoint,
+		NewtImage:       cfg.Controller.NewtImage,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create Newt controller")
+		os.Exit(1)
+	}
+
+	// Setup health checks
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		setupLog.Error(err, "Failed to set up health check")
+		os.Exit(1)
+	}
+
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		setupLog.Error(err, "Failed to set up ready check")
+		os.Exit(1)
+	}
+
+	// Start the manager
+	setupLog.Info("Starting manager")
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "Failed to run manager")
+		os.Exit(1)
+	}
+}

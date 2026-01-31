@@ -1,0 +1,39 @@
+---
+# yaml-language-server: $schema=https://homelab-schemas-epg.pages.dev/source.toolkit.fluxcd.io/gitrepository_v1.json
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: pangolin-gateway-controller
+  namespace: flux-system
+spec:
+  interval: 30m
+  url: https://github.com/dxas90/pangolin-gateway-controller.git
+  ref:
+    branch: main
+  ignore: |
+    # exclude
+    /*
+    # include
+    !k8s/
+# yaml-language-server: $schema=https://kubernetes-schemas.pages.dev/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: pangolin-gateway-controller
+  namespace: flux-system
+spec:
+  path: ./k8s/app
+  prune: true
+  commonMetadata:
+    labels:
+      app.kubernetes.io/custom-part-of: learn
+  targetNamespace: playground
+  sourceRef:
+    kind: GitRepository
+    name: pangolin-gateway-controller
+    namespace: flux-system
+  wait: true
+  interval: 1m
+  retryInterval: 1m
+  timeout: 5m

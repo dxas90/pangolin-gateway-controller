@@ -1,0 +1,53 @@
+# Example configuration for running locally or via config file
+
+pangolin:
+  # Your Pangolin API key (obtain from Pangolin admin panel)
+  apiKey: "your-api-key-here"
+
+  # Your Pangolin organization ID
+  orgId: "your-org-id-here"
+
+  # Pangolin API base URL (optional, defaults to https://api.pangolin.net/v1)
+  baseUrl: "https://api.pangolin.net/v1"
+
+kubernetes:
+  # Path to kubeconfig file (optional, uses in-cluster config if not specified)
+  kubeconfig: ""
+
+  # Kubernetes context to use (optional)
+  context: ""
+
+controller:
+  # GatewayClass name that this controller manages
+  gatewayClassName: "pangolin"
+
+  # Namespace to watch (empty for all namespaces)
+  namespace: ""
+
+  # Address for metrics server
+  metricsBindAddress: ":8080"
+
+  # Address for health probe server
+  healthProbeBindAddress: ":8081"
+
+  # Enable leader election for HA deployments
+  leaderElection: true
+
+  # Leader election configmap/lease name
+  leaderElectionId: "pangolin-gateway-controller-leader"
+
+  # Namespace for leader election resources
+  leaderElectionNamespace: "pangolin-system"
+
+  # Docker image for the newt VPN client
+  newtImage: "docker.io/fosrl/newt:1.9.0"
+
+  # Pangolin endpoint for newt VPN authentication (optional, defaults to https://pangolin.net)
+  newtEndpoint: "https://pangolin.net"
+
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"
+
+  # Log format: json, console
+  format: "json"

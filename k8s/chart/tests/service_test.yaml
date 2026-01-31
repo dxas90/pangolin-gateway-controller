@@ -1,0 +1,47 @@
+suite: test service
+templates:
+  - service.yaml
+tests:
+  - it: should create a ClusterIP service by default
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: metadata.labels["app.kubernetes.io/part-of"]
+          value: pangolin-gateway-controller
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+
+  - it: should use custom service port
+    set:
+      service.port: 8080
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+
+  - it: should create NodePort service
+    set:
+      service.type: NodePort
+    asserts:
+      - equal:
+          path: spec.type
+          value: NodePort
+
+  - it: should have correct selector labels
+    asserts:
+      - isNotEmpty:
+          path: spec.selector
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: pangolin-gateway-controller
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: RELEASE-NAME

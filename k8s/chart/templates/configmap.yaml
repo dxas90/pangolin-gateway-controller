@@ -1,0 +1,12 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "base.fullname" . }}-config
+  labels:
+{{ include "base.labels" $ | indent 4 }}
+data:
+  EXTRA_DUMMY: VALUE
+{{- with .Values.extraEnv }}
+  {{- toYaml . | nindent 2 }}
+{{- end }}

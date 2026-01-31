@@ -1,0 +1,17 @@
+{{- if $.Values.persistence.enabled }}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ include "base.fullname" . }}-pvc
+  labels:
+{{ include "base.labels" $ | indent 4 }}
+  finalizers:
+    - kubernetes.io/pvc-protection
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $.Values.persistence.capacity }}
+  volumeMode: Filesystem
+{{- end }}
