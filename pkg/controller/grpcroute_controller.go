@@ -72,10 +72,19 @@ func (r *GRPCRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 
 	log.Info("Deleting GRPCRoute from Pangolin")
 
-	// Delete resource from Pangolin if exists
-	if resourceID := route.Labels[ResourceIDLabel]; resourceID != "" {
-		// Note: DeleteResource method would need to be added to client
-		log.Info("Resource cleanup - implement DeleteResource if needed", "resourceID", resourceID)
+	// Delete the entire resource from Pangolin (this also deletes all targets)
+	resourceID := route.Labels[ResourceIDLabel]
+	if resourceID != "" {
+		log.Info("Deleting Pangolin resource", "resourceID", resourceID)
+		if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
+			log.Error(err, "Failed to delete resource from Pangolin", "resourceID", resourceID)
+			// Continue with finalizer removal even if deletion fails
+			// (resource might already be deleted)
+		} else {
+			log.Info("Successfully deleted Pangolin resource", "resourceID", resourceID)
+		}
+	} else {
+		log.Info("No resource ID found in labels, skipping Pangolin cleanup")
 	}
 
 	// Remove finalizer
@@ -292,7 +301,7 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 
 	// Get the first hostname from the GRPCRoute
 	subdomain := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
-	domainId := "domain1" // Default fallback
+	domainID := "domain1" // Default fallback
 	protocol := "tcp"     // Default to TCP for gRPC
 
 	if len(route.Spec.Hostnames) > 0 {
@@ -314,11 +323,11 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 					subdomain = hostname[:len(hostname)-len(domainName)]
 				}
 
-				// Get domainId
+				// Get domainID
 				if id, ok := domain["domainId"].(string); ok {
-					domainId = id
+					domainID = id
 				}
-				log.Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainId", domainId)
+				log.Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainID", domainID)
 				break
 			}
 		}
@@ -338,7 +347,7 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 		"subdomain":     subdomain,
 		"http":          false, // gRPC/TCP/UDP is not HTTP
 		"protocol":      protocol,
-		"domainId":      domainId,
+		"domainId":      domainID,
 		"stickySession": false,
 	}
 

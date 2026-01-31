@@ -236,6 +236,14 @@ func (c *Client) DeleteSiteResource(ctx context.Context, resourceID string) erro
 	return err
 }
 
+// DeleteResource deletes a resource via Integration API
+// Endpoint: DELETE /resource/{resourceId}
+func (c *Client) DeleteResource(ctx context.Context, resourceID string) error {
+	path := fmt.Sprintf("/resource/%s", resourceID)
+	_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
+	return err
+}
+
 // CreateTarget creates a new routing target
 func (c *Client) CreateTarget(ctx context.Context, resourceID string, target *Target) (*Target, error) {
 	path := fmt.Sprintf("/resource/%s/target", resourceID)

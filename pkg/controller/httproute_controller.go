@@ -72,14 +72,19 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 
 	log.Info("Deleting HTTPRoute from Pangolin")
 
-	// Delete rules and targets from Pangolin
-	if ruleID := route.Labels["gateway.pangolin.net/rule-id"]; ruleID != "" {
-		resourceID := route.Labels[ResourceIDLabel]
-		if resourceID != "" {
-			if err := r.PangolinClient.DeleteRule(ctx, resourceID, ruleID); err != nil {
-				log.Error(err, "Failed to delete rule from Pangolin", "ruleID", ruleID)
-			}
+	// Delete the entire resource from Pangolin (this also deletes all targets and rules)
+	resourceID := route.Labels[ResourceIDLabel]
+	if resourceID != "" {
+		log.Info("Deleting Pangolin resource", "resourceID", resourceID)
+		if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
+			log.Error(err, "Failed to delete resource from Pangolin", "resourceID", resourceID)
+			// Continue with finalizer removal even if deletion fails
+			// (resource might already be deleted)
+		} else {
+			log.Info("Successfully deleted Pangolin resource", "resourceID", resourceID)
 		}
+	} else {
+		log.Info("No resource ID found in labels, skipping Pangolin cleanup")
 	}
 
 	// Remove finalizer
@@ -203,6 +208,9 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 		existingTargets = []map[string]interface{}{} // Continue with empty list
 	}
 
+	// Track which existing targets are still needed (to identify orphans)
+	matchedTargetIDs := make(map[string]bool)
+
 	// Create targets for each rule (not just each backend)
 	for ruleIdx, rule := range route.Spec.Rules {
 		if len(rule.BackendRefs) == 0 {
@@ -271,6 +279,9 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 				targetExists = true
 				existingTargetID = fmt.Sprintf("%v", target["targetId"])
 
+				// Mark this target as matched (still needed)
+				matchedTargetIDs[existingTargetID] = true
+
 				// Check for configuration drift
 				if fmt.Sprintf("%v", target["pathMatchType"]) != pathMatchType {
 					needsUpdate = true
@@ -325,6 +336,30 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 		targetID := fmt.Sprintf("%v", createdTarget["targetId"])
 		log.Info("Created target with routing rules", "targetID", targetID, "ip", clusterIP, "port", port, "path", path, "pathMatchType", pathMatchType, "priority", priority, "service", serviceName)
+
+		// Mark newly created target as matched
+		matchedTargetIDs[targetID] = true
+	}
+
+	// Clean up orphaned targets that are no longer in the HTTPRoute spec
+	// These are targets that exist in Pangolin but weren't matched/recreated above
+	for _, existingTarget := range existingTargets {
+		existingTargetID := fmt.Sprintf("%v", existingTarget["targetId"])
+
+		// If target wasn't matched, it's orphaned and should be deleted
+		if !matchedTargetIDs[existingTargetID] {
+			orphanedIP := fmt.Sprintf("%v", existingTarget["ip"])
+			orphanedPort := fmt.Sprintf("%v", existingTarget["port"])
+			orphanedPath := fmt.Sprintf("%v", existingTarget["path"])
+
+			log.Info("Deleting orphaned target", "targetId", existingTargetID, "ip", orphanedIP, "port", orphanedPort, "path", orphanedPath)
+			if err := r.PangolinClient.DeleteTarget(ctx, existingTargetID); err != nil {
+				log.Error(err, "Failed to delete orphaned target", "targetId", existingTargetID)
+				// Continue with other orphaned targets
+			} else {
+				log.Info("Successfully deleted orphaned target", "targetId", existingTargetID)
+			}
+		}
 	}
 
 	return nil
@@ -351,147 +386,6 @@ func (r *HTTPRouteReconciler) verifyOrRecreateResource(ctx context.Context, rout
 		}
 		log.Info("Recreated resource after deletion", "oldResourceID", resourceID, "newResourceID", newResourceID)
 	}
-	return nil
-}
-
-// reconcileRules creates or updates routing rules in Pangolin
-func (r *HTTPRouteReconciler) reconcileRules(ctx context.Context, route *gatewayv1.HTTPRoute, resourceID string, log logr.Logger) error {
-	// Get existing rules
-	existingRules, err := r.PangolinClient.ListRules(ctx, resourceID)
-	if err != nil {
-		return fmt.Errorf("failed to list rules: %w", err)
-	}
-
-	// Find rules managed by this HTTPRoute
-	var managedRules []pangolin.Rule
-	for _, rule := range existingRules {
-		if rule.Labels["kubernetes.io/httproute"] == route.Name &&
-			rule.Labels["kubernetes.io/namespace"] == route.Namespace {
-			managedRules = append(managedRules, rule)
-		}
-	}
-
-	// Delete old rules if count doesn't match
-	if len(managedRules) != len(route.Spec.Rules) {
-		for _, rule := range managedRules {
-			if err := r.PangolinClient.DeleteRule(ctx, resourceID, rule.ID); err != nil {
-				log.Error(err, "Failed to delete old rule", "ruleID", rule.ID)
-			}
-		}
-		managedRules = nil
-	}
-
-	// Create or update rules for each HTTPRoute rule
-	for i, routeRule := range route.Spec.Rules {
-		conditions := []pangolin.RuleCondition{}
-
-		// Add hostname conditions
-		for _, hostname := range route.Spec.Hostnames {
-			conditions = append(conditions, pangolin.RuleCondition{
-				Type:     "host",
-				Operator: "equals",
-				Value:    string(hostname),
-			})
-		}
-
-		// Add path conditions from matches
-		if routeRule.Matches != nil {
-			for _, match := range routeRule.Matches {
-				if match.Path != nil {
-					pathType := "prefix"
-					if match.Path.Type != nil && *match.Path.Type == gatewayv1.PathMatchExact {
-						pathType = "equals"
-					} else if match.Path.Type != nil && *match.Path.Type == gatewayv1.PathMatchRegularExpression {
-						pathType = "regex"
-					}
-
-					conditions = append(conditions, pangolin.RuleCondition{
-						Type:     "path",
-						Operator: pathType,
-						Value:    *match.Path.Value,
-					})
-				}
-
-				// Add header conditions
-				if match.Headers != nil {
-					for _, header := range match.Headers {
-						headerType := "equals"
-						if header.Type != nil && *header.Type == gatewayv1.HeaderMatchRegularExpression {
-							headerType = "regex"
-						}
-
-						conditions = append(conditions, pangolin.RuleCondition{
-							Type:     "header",
-							Operator: headerType,
-							Key:      string(header.Name),
-							Value:    header.Value,
-						})
-					}
-				}
-
-				// Add method conditions
-				if match.Method != nil {
-					conditions = append(conditions, pangolin.RuleCondition{
-						Type:     "method",
-						Operator: "equals",
-						Value:    string(*match.Method),
-					})
-				}
-			}
-		}
-
-		// Build actions for backends
-		actions := []pangolin.RuleAction{}
-		if len(routeRule.BackendRefs) > 0 {
-			backends := []map[string]interface{}{}
-			for _, backendRef := range routeRule.BackendRefs {
-				backend := map[string]interface{}{
-					"service":   string(backendRef.Name),
-					"namespace": route.Namespace,
-					"port":      int(*backendRef.Port),
-				}
-				if backendRef.Weight != nil {
-					backend["weight"] = int(*backendRef.Weight)
-				}
-				backends = append(backends, backend)
-			}
-
-			actions = append(actions, pangolin.RuleAction{
-				Type: "route",
-				Config: map[string]interface{}{
-					"backends": backends,
-				},
-			})
-		}
-
-		// Create rule
-		rule := &pangolin.Rule{
-			ResourceID: resourceID,
-			Priority:   i + 1,
-			Conditions: conditions,
-			Actions:    actions,
-			Labels: map[string]string{
-				"kubernetes.io/httproute": route.Name,
-				"kubernetes.io/namespace": route.Namespace,
-			},
-		}
-
-		var createdRule *pangolin.Rule
-		if i < len(managedRules) {
-			// Update existing rule (not implemented in client yet, so delete and recreate)
-			if err := r.PangolinClient.DeleteRule(ctx, resourceID, managedRules[i].ID); err != nil {
-				log.Error(err, "Failed to delete rule for update", "ruleID", managedRules[i].ID)
-			}
-		}
-
-		createdRule, err = r.PangolinClient.CreateRule(ctx, resourceID, rule)
-		if err != nil {
-			return fmt.Errorf("failed to create rule: %w", err)
-		}
-
-		log.Info("Created/updated rule", "ruleID", createdRule.ID, "priority", rule.Priority)
-	}
-
 	return nil
 }
 
@@ -561,7 +455,7 @@ func (r *HTTPRouteReconciler) createPangolinResource(ctx context.Context, route 
 
 	// Get the first hostname from the HTTPRoute
 	subdomain := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
-	domainId := "domain1" // Default fallback
+	domainID := "domain1" // Default fallback
 
 	if len(route.Spec.Hostnames) > 0 {
 		hostname := string(route.Spec.Hostnames[0])
@@ -583,11 +477,11 @@ func (r *HTTPRouteReconciler) createPangolinResource(ctx context.Context, route 
 					subdomain = hostname[:len(hostname)-len(domainName)]
 				}
 
-				// Get domainId (could be "domain1", "domain2", etc.)
+				// Get domainID (could be "domain1", "domain2", etc.)
 				if id, ok := domain["domainId"].(string); ok {
-					domainId = id
+					domainID = id
 				}
-				log.Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainId", domainId)
+				log.Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainID", domainID)
 				break
 			}
 		}
@@ -600,7 +494,7 @@ func (r *HTTPRouteReconciler) createPangolinResource(ctx context.Context, route 
 		"subdomain":     subdomain,
 		"http":          true,
 		"protocol":      "tcp",
-		"domainId":      domainId,
+		"domainId":      domainID,
 		"stickySession": false,
 	}
 
