@@ -31,7 +31,7 @@ const (
 	SiteIDLabel = "gateway.pangolin.net/site-id"
 
 	// ControllerName is the identifier for this controller in status updates
-	ControllerName = "pangolin.net/gateway-controller"
+	ControllerName = "pangol.in/gateway-controller"
 
 	// GatewayClassName is the GatewayClass this controller manages
 	GatewayClassName = "pangolin"

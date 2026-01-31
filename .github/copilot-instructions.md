@@ -175,7 +175,7 @@ if c.Controller.NewtEndpoint == "" {
 
 ### Status Updates Pattern
 - Update Gateway status with conditions: `Programmed`, `Accepted`
-- HTTPRoute status updates per parent: `RouteParentStatus` with `ControllerName: pangolin.net/gateway-controller`
+- HTTPRoute status updates per parent: `RouteParentStatus` with `ControllerName: pangol.in/gateway-controller`
 - Always set `ObservedGeneration` to detect stale status
 - **IMPORTANT**: Use `metav1.Condition`, NOT `gatewayv1.Condition` (Gateway API v1.0.0+)
 

@@ -50,7 +50,7 @@ A Go client library that wraps the Pangolin Integration API:
 ### Resource Mapping
 
 | Kubernetes Resource | Pangolin Resource | Description |
-|---------------------|-------------------|-------------|
+| ------------------- | ----------------- | ----------- |
 | Gateway | Site + SiteResource | Infrastructure endpoint |
 | HTTPRoute | Rules + Targets | Routing configuration |
 | Service | Target | Backend endpoint |

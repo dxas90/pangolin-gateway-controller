@@ -93,7 +93,7 @@ This project implements a production-ready Kubernetes Gateway API controller tha
 ### GatewayClass (`config/gatewayclass.yaml`)
 
 - Defines the "pangolin" GatewayClass
-- Controller name: `pangolin.net/gateway-controller`
+- Controller name: `pangol.in/gateway-controller`
 
 ### Deployment (`config/deployment.yaml`)
 

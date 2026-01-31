@@ -42,7 +42,7 @@ make run
 
 ## Project Structure
 
-```
+```text
 pangolin-gateway-controller/
 ├── cmd/
 │   └── controller/

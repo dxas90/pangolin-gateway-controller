@@ -1,43 +1,30 @@
-1. Get the application URL by running these commands:
-{{- if .Values.httproute.enabled }}
-{{- range $hostname := .Values.httproute.hostnames }}
-  http://{{ $hostname }}
-{{- end }}
+Thank you for installing {{ .Chart.Name }}!
 
-   NOTE: HTTPRoute is enabled. Make sure:
-   - Gateway API CRDs are installed in your cluster
-   - A Gateway controller is running (e.g., Istio, Envoy Gateway, NGINX Gateway)
-   - The Gateway "{{ .Values.httproute.gatewayName }}" exists in namespace "{{ .Values.httproute.gatewayNamespace }}"
+Your Pangolin Gateway Controller release is named {{ .Release.Name }}.
 
-   To check the HTTPRoute status:
-   kubectl get httproute --namespace {{ .Release.Namespace }} {{ include "base.fullname" . }}
+To verify that the controller is running:
 
-{{- else if contains "NodePort" .Values.service.type }}
-  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "base.fullname" . }})
-  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
-  echo http://$NODE_IP:$NODE_PORT
-{{- else if contains "LoadBalancer" .Values.service.type }}
-     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
-           You can watch its status by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "base.fullname" . }}'
-  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "base.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
-  echo http://$SERVICE_IP:{{ .Values.service.port }}
-{{- else if contains "ClusterIP" .Values.service.type }}
-  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "base.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
-  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
-  echo "Visit http://127.0.0.1:8080 to use your application"
-  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:$CONTAINER_PORT
-{{- end }}
+  kubectl get pods -n {{ .Values.namespace }} -l app.kubernetes.io/name={{ include "base.name" . }}
 
-2. Application deployment status:
-   kubectl get deployment --namespace {{ .Release.Namespace }} {{ include "base.fullname" . }}
-   kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "base.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+To view controller logs:
 
-{{- if .Values.persistence.enabled }}
-3. Persistent storage:
-   kubectl get pvc --namespace {{ .Release.Namespace }} {{ include "base.fullname" . }}
-{{- end }}
+  kubectl logs -n {{ .Values.namespace }} -l app.kubernetes.io/name={{ include "base.name" . }} -f
 
-{{- if .Values.autoscaling.enabled }}
-4. Horizontal Pod Autoscaler:
-   kubectl get hpa --namespace {{ .Release.Namespace }} {{ include "base.fullname" . }}
-{{- end }}
+To check controller health:
+
+  kubectl port-forward -n {{ .Values.namespace }} svc/{{ include "base.fullname" . }}-metrics {{ .Values.service.healthPort }}:{{ .Values.service.healthPort }}
+  curl http://localhost:{{ .Values.service.healthPort }}/healthz
+
+Next steps:
+
+1. Create a GatewayClass resource (if not already created):
+   kubectl apply -f https://raw.githubusercontent.com/dxas90/pangolin-gateway-controller/main/config/gatewayclass.yaml
+
+2. Create a Gateway resource:
+   kubectl apply -f https://raw.githubusercontent.com/dxas90/pangolin-gateway-controller/main/examples/gateway.yaml
+
+3. Create HTTPRoute or GRPCRoute resources to expose your services
+
+For more information:
+- Documentation: https://github.com/dxas90/pangolin-gateway-controller
+- Issues: https://github.com/dxas90/pangolin-gateway-controller/issues

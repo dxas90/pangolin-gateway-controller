@@ -4,7 +4,8 @@ templates:
 tests:
   - it: should create deployment with default values
     set:
-      autoscaling.enabled: false
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
     asserts:
       - isKind:
           of: Deployment
@@ -12,114 +13,102 @@ tests:
           path: metadata.name
           value: RELEASE-NAME-pangolin-gateway-controller
       - equal:
-          path: metadata.labels["app.kubernetes.io/part-of"]
-          value: pangolin-gateway-controller
-      - equal:
           path: spec.replicas
           value: 1
       - equal:
-          path: spec.template.spec.containers[0].image
-          value: "dxas90/pangolin-gateway-controller:latest"
-
-  - it: should not set replicas when autoscaling is enabled
-    set:
-      autoscaling.enabled: true
-    asserts:
-      - isKind:
-          of: Deployment
-      - isNull:
-          path: spec.replicas
-
-  - it: should set custom replica count
-    set:
-      replicaCount: 3
-      autoscaling.enabled: false
-    asserts:
+          path: spec.template.spec.containers[0].name
+          value: controller
       - equal:
-          path: spec.replicas
-          value: 3
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/dxas90/pangolin-gateway-controller:latest
 
   - it: should use custom image tag
     set:
       image.tag: "v1.2.3"
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: "dxas90/pangolin-gateway-controller:v1.2.3"
+          value: ghcr.io/dxas90/pangolin-gateway-controller:v1.2.3
 
   - it: should set resource limits and requests
+    set:
+      resources.limits.memory: "256Mi"
+      resources.requests.memory: "128Mi"
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
     asserts:
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
-          value: 512Mi
+          value: 256Mi
       - equal:
-          path: spec.template.spec.containers[0].resources.requests.cpu
-          value: 100m
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
-          value: 512Mi
+          value: 128Mi
 
-  - it: should configure http based liveness and readiness probes
-    asserts:
-      - equal:
-          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
-          value: /healthz
-      - equal:
-          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
-          value: /healthz
-
-  - it: should include environment variables
+  - it: should include environment variables from secret
+    set:
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: POD_NAMESPACE
+            name: PANGOLIN_API_KEY
             valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
+              secretKeyRef:
+                name: RELEASE-NAME-pangolin-gateway-controller-credentials
+                key: api-key
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PANGOLIN_ORG_ID
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-pangolin-gateway-controller-credentials
+                key: org-id
 
-  - it: should set security context values for the container
+  - it: should have correct security context
+    set:
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
     asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 65532
       - equal:
           path: spec.template.spec.containers[0].securityContext.runAsNonRoot
           value: true
       - equal:
-          path: spec.template.spec.containers[0].securityContext.runAsUser
-          value: 1001
-      - equal:
           path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
-          value: false
+          value: true
 
-  - it: should apply custom labels
+  - it: should have correct ports
     set:
-      podLabels:
-        custom-label: custom-value
-    asserts:
-      - isSubset:
-          path: spec.template.metadata.labels
-          content:
-            custom-label: custom-value
-
-  - it: should apply custom annotations
-    set:
-      podAnnotations:
-        custom-annotation: custom-value
-    asserts:
-      - equal:
-            path: spec.template.metadata.annotations.custom-annotation
-            value: custom-value
-
-  - it: should mount /tmp as an emptyDir when readOnlyRootFilesystem is enabled
-    set:
-      securityContext.readOnlyRootFilesystem: true
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].volumeMounts
+          path: spec.template.spec.containers[0].ports
           content:
-            name: app-cache
-            mountPath: /var/cache/app
+            name: metrics
+            containerPort: 8080
+            protocol: TCP
       - contains:
-          path: spec.template.spec.volumes
+          path: spec.template.spec.containers[0].ports
           content:
-            name: app-cache
-            emptyDir: {}
+            name: health
+            containerPort: 8081
+            protocol: TCP
+
+  - it: should have args with --env-config
+    set:
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--env-config"

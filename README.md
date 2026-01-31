@@ -67,7 +67,7 @@ GRPCRoute          ──────►   Resource + Targets (TCP/UDP)
 ### 1. Install Gateway API CRDs
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
 ```
 
 ### 2. Create Pangolin API Credentials

@@ -109,6 +109,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup GatewayClass controller
+	if err = (&controller.GatewayClassReconciler{
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("GatewayClass"),
+		Scheme:         mgr.GetScheme(),
+		ControllerName: "pangol.in/gateway-controller",
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create GatewayClass controller")
+		os.Exit(1)
+	}
+
 	// Setup HTTPRoute controller
 	if err = (&controller.HTTPRouteReconciler{
 		Client:         mgr.GetClient(),

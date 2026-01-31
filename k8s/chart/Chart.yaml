@@ -1,6 +1,6 @@
 apiVersion: v2
 name: "pangolin-gateway-controller"
-description: "Helm chart for pangolin-gateway-controller API"
+description: "Kubernetes Gateway API controller for Pangolin platform integration"
 type: application
 version: "0.1.0" # {"$imagepolicy": "playground:pangolin-gateway-controller-policy:tag"}
 appVersion: "0.1.0" # {"$imagepolicy": "playground:pangolin-gateway-controller-policy:tag"}

@@ -2,46 +2,36 @@ suite: test service
 templates:
   - service.yaml
 tests:
-  - it: should create a ClusterIP service by default
+  - it: should create service with metrics and health ports
     asserts:
       - isKind:
           of: Service
       - equal:
+          path: metadata.name
+          value: RELEASE-NAME-pangolin-gateway-controller-metrics
+      - equal:
           path: spec.type
           value: ClusterIP
-      - equal:
-          path: metadata.labels["app.kubernetes.io/part-of"]
-          value: pangolin-gateway-controller
-      - equal:
-          path: spec.ports[0].port
-          value: 8080
-      - equal:
-          path: spec.ports[0].targetPort
-          value: http
+      - contains:
+          path: spec.ports
+          content:
+            name: metrics
+            port: 8080
+            targetPort: metrics
+            protocol: TCP
+      - contains:
+          path: spec.ports
+          content:
+            name: health
+            port: 8081
+            targetPort: health
+            protocol: TCP
 
-  - it: should use custom service port
-    set:
-      service.port: 8080
+  - it: should include correct labels
     asserts:
-      - equal:
-          path: spec.ports[0].port
-          value: 8080
-
-  - it: should create NodePort service
-    set:
-      service.type: NodePort
-    asserts:
-      - equal:
-          path: spec.type
-          value: NodePort
-
-  - it: should have correct selector labels
-    asserts:
-      - isNotEmpty:
-          path: spec.selector
-      - equal:
-          path: spec.selector["app.kubernetes.io/name"]
-          value: pangolin-gateway-controller
-      - equal:
-          path: spec.selector["app.kubernetes.io/instance"]
-          value: RELEASE-NAME
+      - isSubset:
+          path: metadata.labels
+          content:
+            app.kubernetes.io/name: pangolin-gateway-controller
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: metrics

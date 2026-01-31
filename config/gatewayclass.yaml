@@ -3,5 +3,5 @@ kind: GatewayClass
 metadata:
   name: pangolin
 spec:
-  controllerName: pangolin.net/gateway-controller
+  controllerName: pangol.in/gateway-controller
   description: "Pangolin Gateway for Kubernetes Gateway API integration"
