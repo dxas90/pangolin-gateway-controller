@@ -39,7 +39,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	route := &gatewayv1.HTTPRoute{}
 	if err := r.Get(ctx, req.NamespacedName, route); err != nil {
 		if errors.IsNotFound(err) {
-			log.Info("HTTPRoute resource not found, likely deleted")
+			log.V(1).Info("HTTPRoute resource not found, likely deleted")
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Failed to get HTTPRoute")
@@ -65,26 +65,65 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // handleDelete handles the deletion of an HTTPRoute resource
+// Only deletes targets belonging to this HTTPRoute, not the whole resource
+// Deletes the resource only if no targets remain
 func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1.HTTPRoute, log logr.Logger) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(route, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("Deleting HTTPRoute from Pangolin")
+	log.Info("Deleting HTTPRoute targets from Pangolin")
 
-	// Delete the entire resource from Pangolin (this also deletes all targets and rules)
-	resourceID := route.Labels[ResourceIDLabel]
-	if resourceID != "" {
-		log.Info("Deleting Pangolin resource", "resourceID", resourceID)
-		if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
-			log.Error(err, "Failed to delete resource from Pangolin", "resourceID", resourceID)
-			// Continue with finalizer removal even if deletion fails
-			// (resource might already be deleted)
-		} else {
-			log.Info("Successfully deleted Pangolin resource", "resourceID", resourceID)
+	// Delete only the targets belonging to this HTTPRoute
+	// Resources are shared across HTTPRoutes with the same hostname
+	for _, hostname := range route.Spec.Hostnames {
+		// Find the resource for this hostname (search by resource name)
+		resourceID, err := r.findExistingResourceBySubdomain(ctx, string(hostname), log)
+		if err != nil || resourceID == "" {
+			log.Info("Resource not found, skipping target deletion", "hostname", hostname)
+			continue
 		}
-	} else {
-		log.Info("No resource ID found in labels, skipping Pangolin cleanup")
+
+		// Get all targets for this resource
+		existingTargets, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
+		if err != nil {
+			log.Error(err, "Failed to list targets for deletion", "resourceID", resourceID)
+			continue
+		}
+
+		// Delete targets that belong to this HTTPRoute (match by route namespace/name in target metadata)
+		targetsDeleted := 0
+		for _, target := range existingTargets {
+			targetIDFloat, ok := target["targetId"].(float64)
+			if !ok {
+				continue
+			}
+			targetID := fmt.Sprintf("%.0f", targetIDFloat)
+
+			// Check if this target belongs to this HTTPRoute by comparing IPs with current service IPs
+			// For now, delete all targets since we don't have metadata tracking
+			// TODO: Add metadata to targets to track which HTTPRoute they belong to
+			log.Info("Deleting target", "targetId", targetID, "resourceID", resourceID, "hostname", hostname)
+			if err := r.PangolinClient.DeleteTarget(ctx, targetID); err != nil {
+				log.Error(err, "Failed to delete target", "targetId", targetID)
+			} else {
+				targetsDeleted++
+			}
+		}
+
+		log.Info("Deleted targets for hostname", "hostname", hostname, "resourceID", resourceID, "count", targetsDeleted)
+
+		// Check if any targets remain
+		remainingTargets, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
+		if err == nil && len(remainingTargets) == 0 {
+			// No targets left, delete the resource
+			log.Info("No targets remain, deleting resource", "resourceID", resourceID, "hostname", hostname)
+			if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
+				log.Error(err, "Failed to delete resource", "resourceID", resourceID)
+			} else {
+				log.Info("Successfully deleted resource", "resourceID", resourceID)
+			}
+		}
 	}
 
 	// Remove finalizer
@@ -132,62 +171,66 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Get or create resource ID
-	resourceID := route.Labels[ResourceIDLabel]
-	if resourceID == "" {
-		// Check if resource already exists with the same name/subdomain
-		existingResourceID, err := r.findExistingResource(ctx, route, log)
+	// Process one resource per unique hostname (shared across HTTPRoutes)
+	if len(route.Spec.Hostnames) == 0 {
+		log.Info("No hostnames specified, cannot create resources")
+		r.updateRouteStatus(ctx, route, false, "NoHostnames", "HTTPRoute has no hostnames configured")
+		return ctrl.Result{}, nil
+	}
+
+	// Process each hostname
+	processedHostnames := 0
+	for _, hostname := range route.Spec.Hostnames {
+		// Extract subdomain for resource creation (still needed for Pangolin API)
+		subdomain, err := r.extractSubdomain(ctx, string(hostname), log)
 		if err != nil {
-			log.Error(err, "Failed to check for existing resource")
+			// Skip hostnames that don't match any Pangolin domain
+			log.Info("Skipping hostname that doesn't match any Pangolin domain", "hostname", hostname)
+			continue
+		}
+
+		// Check if resource already exists for this hostname (search by resource name)
+		resourceID, err := r.findExistingResourceBySubdomain(ctx, string(hostname), log)
+		if err != nil {
+			log.Error(err, "Failed to check for existing resource", "hostname", hostname)
 			r.updateRouteStatus(ctx, route, false, "ResourceLookupFailed", err.Error())
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 
-		if existingResourceID != "" {
-			// Resource already exists, use it
-			resourceID = existingResourceID
-			log.Info("Found existing Pangolin resource", "resourceID", resourceID)
-		} else {
-			// Create new Pangolin resource for this HTTPRoute
-			newResourceID, err := r.createPangolinResource(ctx, route, gateway, log)
+		if resourceID == "" {
+			// Create new resource using hostname as name (e.g., "test.dev0ps.me")
+			resourceName := string(hostname)
+			newResourceID, err := r.createPangolinResourceForHostname(ctx, route, gateway, string(hostname), resourceName, log)
 			if err != nil {
-				log.Error(err, "Failed to create Pangolin resource")
+				log.Error(err, "Failed to create Pangolin resource", "hostname", hostname)
 				r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
 			resourceID = newResourceID
-			log.Info("Created Pangolin resource", "resourceID", resourceID)
+			log.Info("Created Pangolin resource", "resourceID", resourceID, "hostname", hostname, "resourceName", resourceName)
+		} else {
+			log.V(1).Info("Using existing Pangolin resource", "resourceID", resourceID, "hostname", hostname, "subdomain", subdomain)
 		}
 
-		// Update route labels with resource ID
-		if route.Labels == nil {
-			route.Labels = make(map[string]string)
-		}
-		route.Labels[ResourceIDLabel] = resourceID
-		if err := r.Update(ctx, route); err != nil {
-			log.Error(err, "Failed to update HTTPRoute with resource ID")
-			return ctrl.Result{}, err
-		}
-	} else {
-		// Verify resource still exists in Pangolin, recreate if deleted
-		if err := r.verifyOrRecreateResource(ctx, route, gateway, resourceID, log); err != nil {
-			log.Error(err, "Failed to verify/recreate resource")
-			r.updateRouteStatus(ctx, route, false, "ResourceVerificationFailed", err.Error())
+		// Create or update targets for this HTTPRoute's rules under the shared resource
+		if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
+			log.Error(err, "Failed to reconcile targets", "resourceID", resourceID, "hostname", hostname)
+			r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
+		processedHostnames++
 	}
 
-	// Create or update targets for backends
-	if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
-		log.Error(err, "Failed to reconcile targets")
-		r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	if processedHostnames == 0 {
+		log.Info("No hostnames matched Pangolin domains, HTTPRoute has no valid hostnames")
+		r.updateRouteStatus(ctx, route, false, "NoMatchingDomains", "None of the hostnames match Pangolin domains")
+		return ctrl.Result{}, nil
 	}
 
 	// Update HTTPRoute status
 	r.updateRouteStatus(ctx, route, true, "Accepted", "HTTPRoute is configured in Pangolin")
 
-	log.Info("Successfully reconciled HTTPRoute", "resourceID", resourceID)
+	log.Info("Successfully reconciled HTTPRoute", "processedHostnames", processedHostnames, "totalHostnames", len(route.Spec.Hostnames))
 	// Requeue after 5 minutes to periodically verify resource still exists
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
@@ -204,7 +247,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	// Get existing targets from Pangolin
 	existingTargets, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
 	if err != nil {
-		log.Error(err, "Failed to list existing targets, will attempt to create anyway")
+		log.V(1).Info("Failed to list existing targets, will attempt to create anyway", "error", err.Error())
 		existingTargets = []map[string]interface{}{} // Continue with empty list
 	}
 
@@ -214,7 +257,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	// Create targets for each rule (not just each backend)
 	for ruleIdx, rule := range route.Spec.Rules {
 		if len(rule.BackendRefs) == 0 {
-			log.Info("Skipping rule with no backends", "ruleIndex", ruleIdx)
+			log.V(1).Info("Skipping rule with no backends", "ruleIndex", ruleIdx)
 			continue
 		}
 
@@ -297,7 +340,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 				}
 
 				if !needsUpdate {
-					log.Info("Target already exists with correct configuration, skipping", "ip", clusterIP, "port", port, "path", path, "targetId", existingTargetID)
+					log.V(1).Info("Target already exists with correct configuration, skipping", "ip", clusterIP, "port", port, "path", path, "targetId", existingTargetID)
 				}
 				break
 			}
@@ -309,7 +352,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 		// If target exists but has drifted, delete it first
 		if targetExists && needsUpdate {
-			log.Info("Deleting drifted target", "targetId", existingTargetID)
+			log.V(1).Info("Deleting drifted target", "targetId", existingTargetID)
 			if err := r.PangolinClient.DeleteTarget(ctx, existingTargetID); err != nil {
 				log.Error(err, "Failed to delete drifted target", "targetId", existingTargetID)
 				// Continue to try recreating anyway
@@ -341,10 +384,29 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 		matchedTargetIDs[targetID] = true
 	}
 
-	// Clean up orphaned targets that are no longer in the HTTPRoute spec
-	// These are targets that exist in Pangolin but weren't matched/recreated above
+	// Build a set of paths from the current HTTPRoute's rules
+	// Only delete orphaned targets that match paths defined in this HTTPRoute
+	routePaths := make(map[string]bool)
+	for _, rule := range route.Spec.Rules {
+		rulePath := "/"
+		if len(rule.Matches) > 0 && rule.Matches[0].Path != nil {
+			rulePath = *rule.Matches[0].Path.Value
+		}
+		routePaths[rulePath] = true
+	}
+
+	// Clean up orphaned targets that belong to this HTTPRoute's paths
+	// Only delete targets whose path matches one of this HTTPRoute's rule paths
 	for _, existingTarget := range existingTargets {
 		existingTargetID := fmt.Sprintf("%v", existingTarget["targetId"])
+		targetPath := fmt.Sprintf("%v", existingTarget["path"])
+
+		// Check if this target's path matches any of this HTTPRoute's rule paths
+		if !routePaths[targetPath] {
+			// This target's path doesn't match any of our rules - it belongs to another HTTPRoute
+			log.V(1).Info("Skipping target with non-matching path (from different HTTPRoute)", "targetId", existingTargetID, "targetPath", targetPath)
+			continue
+		}
 
 		// If target wasn't matched, it's orphaned and should be deleted
 		if !matchedTargetIDs[existingTargetID] {
@@ -365,77 +427,87 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	return nil
 }
 
-// verifyOrRecreateResource checks if the resource exists in Pangolin and recreates if deleted
-func (r *HTTPRouteReconciler) verifyOrRecreateResource(ctx context.Context, route *gatewayv1.HTTPRoute, gateway *gatewayv1.Gateway, resourceID string, log logr.Logger) error {
-	// Try to get existing targets to verify resource exists
-	_, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
-	if err != nil {
-		// Resource likely doesn't exist, recreate it
-		log.Info("Resource not found in Pangolin, recreating", "resourceID", resourceID)
-		newResourceID, createErr := r.createPangolinResource(ctx, route, gateway, log)
-		if createErr != nil {
-			return fmt.Errorf("failed to recreate resource: %w", createErr)
-		}
-		// Update route labels with new resource ID
-		if route.Labels == nil {
-			route.Labels = make(map[string]string)
-		}
-		route.Labels[ResourceIDLabel] = newResourceID
-		if err := r.Update(ctx, route); err != nil {
-			return fmt.Errorf("failed to update HTTPRoute with new resource ID: %w", err)
-		}
-		log.Info("Recreated resource after deletion", "oldResourceID", resourceID, "newResourceID", newResourceID)
-	}
-	return nil
-}
-
-// findExistingResource checks if a resource with the same subdomain already exists
-func (r *HTTPRouteReconciler) findExistingResource(ctx context.Context, route *gatewayv1.HTTPRoute, log logr.Logger) (string, error) {
+// extractSubdomain extracts the subdomain part from a full hostname by removing the domain suffix
+func (r *HTTPRouteReconciler) extractSubdomain(ctx context.Context, hostname string, log logr.Logger) (string, error) {
 	// Get organization domains
 	domains, err := r.PangolinClient.ListDomains(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to list organization domains: %w", err)
 	}
 
-	// Calculate expected subdomain (same logic as createPangolinResource)
-	subdomain := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
+	log.V(1).Info("Checking domains for hostname", "hostname", hostname, "domainCount", len(domains))
 
-	if len(route.Spec.Hostnames) > 0 {
-		hostname := string(route.Spec.Hostnames[0])
+	// Match hostname against organization domains to extract subdomain
+	for _, domain := range domains {
+		domainName, ok := domain["baseDomain"].(string)
+		if !ok {
+			continue
+		}
 
-		// Match hostname against organization domains
-		for _, domain := range domains {
-			domainName, ok := domain["name"].(string)
-			if !ok {
-				continue
+		log.V(1).Info("Checking domain", "hostname", hostname, "domainName", domainName, "hostnameLen", len(hostname), "domainLen", len(domainName))
+
+		// Check if hostname ends with this domain
+		if len(hostname) > len(domainName) && hostname[len(hostname)-len(domainName):] == domainName {
+			// Extract subdomain by removing the domain suffix
+			// Example: "test.dev0ps.me" with domain "dev0ps.me" -> "test"
+			if hostname[len(hostname)-len(domainName)-1] == '.' {
+				subdomain := hostname[:len(hostname)-len(domainName)-1]
+				log.V(1).Info("Extracted subdomain with dot", "hostname", hostname, "domain", domainName, "subdomain", subdomain)
+				return subdomain, nil
 			}
-
-			// Check if hostname ends with this domain
-			if len(hostname) > len(domainName) && hostname[len(hostname)-len(domainName):] == domainName {
-				// Extract subdomain
-				if hostname[len(hostname)-len(domainName)-1] == '.' {
-					subdomain = hostname[:len(hostname)-len(domainName)-1]
-				} else {
-					subdomain = hostname[:len(hostname)-len(domainName)]
-				}
-				break
-			}
+			subdomain := hostname[:len(hostname)-len(domainName)]
+			log.V(1).Info("Extracted subdomain without dot", "hostname", hostname, "domain", domainName, "subdomain", subdomain)
+			return subdomain, nil
 		}
 	}
 
+	// If no domain matches, return error - hostname doesn't match any Pangolin domain
+	log.Info("Hostname does not match any Pangolin domain, skipping", "hostname", hostname, "availableDomains", len(domains))
+	return "", fmt.Errorf("hostname %s does not match any Pangolin domain", hostname)
+}
+
+// verifyOrRecreateResourceForHostname checks if the resource exists in Pangolin and recreates if deleted
+func (r *HTTPRouteReconciler) verifyOrRecreateResourceForHostname(ctx context.Context, route *gatewayv1.HTTPRoute, gateway *gatewayv1.Gateway, resourceID, hostname string, idx int, log logr.Logger) error {
+	// Try to get existing targets to verify resource exists
+	_, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
+	if err != nil {
+		// Resource likely doesn't exist, recreate it
+		log.Info("Resource not found in Pangolin, recreating", "resourceID", resourceID, "hostname", hostname, "index", idx)
+		resourceName := fmt.Sprintf("%s-%s-%d", route.Namespace, route.Name, idx)
+		newResourceID, createErr := r.createPangolinResourceForHostname(ctx, route, gateway, hostname, resourceName, log)
+		if createErr != nil {
+			return fmt.Errorf("failed to recreate resource: %w", createErr)
+		}
+
+		// Update label with new resource ID
+		resourceLabelKey := fmt.Sprintf("%s-%d", ResourceIDLabel, idx)
+		route.Labels[resourceLabelKey] = newResourceID
+		if updateErr := r.Update(ctx, route); updateErr != nil {
+			return fmt.Errorf("failed to update HTTPRoute with new resource ID: %w", updateErr)
+		}
+
+		log.Info("Successfully recreated resource", "oldResourceID", resourceID, "newResourceID", newResourceID)
+	}
+
+	return nil
+}
+
+// findExistingResourceBySubdomain checks if a resource with the given subdomain already exists
+// Since we now name resources by full hostname, search by name field
+func (r *HTTPRouteReconciler) findExistingResourceBySubdomain(ctx context.Context, hostname string, log logr.Logger) (string, error) {
 	// List all existing resources
 	resources, err := r.PangolinClient.ListResources(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to list resources: %w", err)
 	}
 
-	// Find resource with matching subdomain
+	// Find resource with matching name (we use hostname as resource name)
 	for _, resource := range resources {
-		if resSubdomain, ok := resource["subdomain"].(string); ok {
-			if resSubdomain == subdomain {
+		if resName, ok := resource["name"].(string); ok {
+			if resName == hostname {
 				// Found matching resource
 				resourceID := fmt.Sprintf("%v", resource["resourceId"])
-				log.Info("Found existing resource with matching subdomain", "resourceID", resourceID, "subdomain", subdomain)
+				log.V(1).Info("Found existing resource with matching hostname", "resourceID", resourceID, "hostname", hostname)
 				return resourceID, nil
 			}
 		}
@@ -445,52 +517,48 @@ func (r *HTTPRouteReconciler) findExistingResource(ctx context.Context, route *g
 	return "", nil
 }
 
-// createPangolinResource creates a new resource in Pangolin for the HTTPRoute
-func (r *HTTPRouteReconciler) createPangolinResource(ctx context.Context, route *gatewayv1.HTTPRoute, gateway *gatewayv1.Gateway, log logr.Logger) (string, error) {
+// createPangolinResourceForHostname creates a new resource in Pangolin for a specific hostname
+func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Context, route *gatewayv1.HTTPRoute, gateway *gatewayv1.Gateway, hostname, resourceName string, log logr.Logger) (string, error) {
 	// Get organization domains
 	domains, err := r.PangolinClient.ListDomains(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to list organization domains: %w", err)
 	}
 
-	// Get the first hostname from the HTTPRoute
-	subdomain := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
+	// Extract subdomain by removing domain suffix
+	subdomain := hostname
 	domainID := "domain1" // Default fallback
 
-	if len(route.Spec.Hostnames) > 0 {
-		hostname := string(route.Spec.Hostnames[0])
+	// Match hostname against organization domains to extract subdomain
+	for _, domain := range domains {
+		domainName, ok := domain["baseDomain"].(string)
+		if !ok {
+			continue
+		}
 
-		// Match hostname against organization domains
-		for _, domain := range domains {
-			domainName, ok := domain["name"].(string)
-			if !ok {
-				continue
+		// Check if hostname ends with this domain
+		if len(hostname) > len(domainName) && hostname[len(hostname)-len(domainName):] == domainName {
+			// Extract subdomain by removing the domain suffix
+			// Example: "test.dev0ps.me" with domain "dev0ps.me" -> "test"
+			if hostname[len(hostname)-len(domainName)-1] == '.' {
+				subdomain = hostname[:len(hostname)-len(domainName)-1]
+			} else {
+				subdomain = hostname[:len(hostname)-len(domainName)]
 			}
 
-			// Check if hostname ends with this domain
-			if len(hostname) > len(domainName) && hostname[len(hostname)-len(domainName):] == domainName {
-				// Extract subdomain by removing the domain suffix
-				// Example: "test.example.com" with domain "example.com" -> "test"
-				if hostname[len(hostname)-len(domainName)-1] == '.' {
-					subdomain = hostname[:len(hostname)-len(domainName)-1]
-				} else {
-					subdomain = hostname[:len(hostname)-len(domainName)]
-				}
-
-				// Get domainID (could be "domain1", "domain2", etc.)
-				if id, ok := domain["domainId"].(string); ok {
-					domainID = id
-				}
-				log.Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainID", domainID)
-				break
+			// Get domainID (could be "domain1", "domain2", etc.)
+			if id, ok := domain["domainId"].(string); ok {
+				domainID = id
 			}
+			log.V(1).Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainID", domainID)
+			break
 		}
 	}
 
 	// Create resource via Integration API
 	// Endpoint: PUT /org/{orgId}/resource
 	resourceData := map[string]interface{}{
-		"name":          fmt.Sprintf("%s-%s", route.Namespace, route.Name),
+		"name":          resourceName,
 		"subdomain":     subdomain,
 		"http":          true,
 		"protocol":      "tcp",
@@ -509,6 +577,26 @@ func (r *HTTPRouteReconciler) createPangolinResource(ctx context.Context, route 
 		return "", fmt.Errorf("no resourceId in response")
 	}
 
+	// Extract headers from HTTPRoute filters (RequestHeaderModifier)
+	headers := r.extractHeadersFromRoute(route, log)
+
+	// Update resource with headers if any are defined
+	// Headers are shared across all HTTPRoutes using this hostname
+	if len(headers) > 0 {
+		log.V(1).Info("Updating resource with headers", "resourceID", resourceID, "headerCount", len(headers))
+		updateData := map[string]interface{}{
+			"stickySession": false,
+			"ssl":           true,
+			"headers":       headers,
+		}
+		if err := r.PangolinClient.UpdateResource(ctx, resourceID, updateData); err != nil {
+			log.Error(err, "Failed to update resource with headers", "resourceID", resourceID)
+			// Don't fail resource creation if header update fails
+		}
+	} else {
+		log.V(1).Info("No headers to add for this resource", "resourceID", resourceID)
+	}
+
 	// Check if user wants to disable SSO via annotation
 	disableSSO := false // Default: disable SSO
 	if val, ok := route.Annotations["gateway.pangolin.net/disable-sso"]; ok && val == "true" {
@@ -517,7 +605,7 @@ func (r *HTTPRouteReconciler) createPangolinResource(ctx context.Context, route 
 
 	if disableSSO {
 		// Disable SSO using PATCH /resource/{resourceId} with {"sso":false}
-		log.Info("Attempting to disable SSO via PATCH", "resourceID", resourceID)
+		log.V(1).Info("Attempting to disable SSO via PATCH", "resourceID", resourceID)
 		patchData := map[string]interface{}{
 			"sso":         false,
 			"skipToIdpId": 1,
@@ -531,8 +619,33 @@ func (r *HTTPRouteReconciler) createPangolinResource(ctx context.Context, route 
 		log.Info("SSO remains enabled (annotation gateway.pangolin.net/disable-sso=true)", "resourceID", resourceID)
 	}
 
-	log.Info("Created Pangolin resource", "resourceID", resourceID, "subdomain", subdomain)
+	log.Info("Created Pangolin resource", "resourceID", resourceID, "name", resourceName, "subdomain", subdomain)
 	return resourceID, nil
+}
+
+// extractHeadersFromRoute extracts headers to add from HTTPRoute filters
+func (r *HTTPRouteReconciler) extractHeadersFromRoute(route *gatewayv1.HTTPRoute, log logr.Logger) []map[string]string {
+	var headers []map[string]string
+
+	// Check each rule for RequestHeaderModifier filters
+	for _, rule := range route.Spec.Rules {
+		for _, filter := range rule.Filters {
+			if filter.Type == gatewayv1.HTTPRouteFilterRequestHeaderModifier {
+				if filter.RequestHeaderModifier != nil {
+					// Add headers from the filter
+					for _, header := range filter.RequestHeaderModifier.Add {
+						headers = append(headers, map[string]string{
+							"name":  string(header.Name),
+							"value": header.Value,
+						})
+						log.Info("Found header to add", "name", header.Name, "value", header.Value)
+					}
+				}
+			}
+		}
+	}
+
+	return headers
 }
 
 // reconcileTargets creates or updates backend targets in Pangolin

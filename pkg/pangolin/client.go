@@ -244,6 +244,14 @@ func (c *Client) DeleteResource(ctx context.Context, resourceID string) error {
 	return err
 }
 
+// UpdateResource updates a resource via Integration API (for headers, SSL settings, etc.)
+// Endpoint: POST /resource/{resourceId}
+func (c *Client) UpdateResource(ctx context.Context, resourceID string, data map[string]interface{}) error {
+	path := fmt.Sprintf("/resource/%s", resourceID)
+	_, err := c.doRequest(ctx, http.MethodPost, path, data)
+	return err
+}
+
 // CreateTarget creates a new routing target
 func (c *Client) CreateTarget(ctx context.Context, resourceID string, target *Target) (*Target, error) {
 	path := fmt.Sprintf("/resource/%s/target", resourceID)
