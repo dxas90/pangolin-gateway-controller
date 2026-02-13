@@ -35,15 +35,15 @@ This is a **Kubernetes Gateway API controller** written in Go that bridges Kuber
 
 4. **HTTPRoute Reconciler** (`pkg/controller/httproute_controller.go`):
    - Watches `HTTPRoute` resources
-   - **Resource idempotency**: Checks for existing resources via `ListResources()` before creating (matches by subdomain)
-   - Creates Pangolin resources via Integration API for HTTP traffic (`PUT /org/{orgId}/resource`)
+   - **One Pangolin resource per unique hostname** (shared across multiple HTTPRoutes)
+   - Resources named by full hostname (e.g., "test.dev0ps.me") not namespace-indexed
+   - **Hostname filtering**: Skips hostnames that don't match any Pangolin domain (prevents invalid resources like "test.example.com.dev0ps.me")
+   - **Path-based target ownership**: Each HTTPRoute manages only targets matching its rule paths (prevents deletion loops)
    - Creates targets pointing to Service ClusterIP addresses (`PUT /resource/{resourceId}/target`)
    - **One target per HTTPRoute rule** (not per backend) with routing properties: path, pathMatchType, priority
-   - Queries organization domains to match hostnames dynamically
    - Periodic reconciliation every 5 minutes to verify resource still exists
    - Auto-recreates resource if deleted from Pangolin
    - SSO configuration: Controlled via annotation `gateway.pangolin.net/disable-sso=true` (default: false/enabled)
-   - Label storage: Stores `gateway.pangolin.net/resource-id` in HTTPRoute labels for tracking
 
 5. **GRPCRoute Reconciler** (`pkg/controller/grpcroute_controller.go`):
    - Watches `GRPCRoute` resources for TCP/UDP services
@@ -122,26 +122,24 @@ make deploy IMG=pangolin-gateway-controller:latest
 ### Resource Idempotency Pattern
 ```go
 // HTTPRoute controller checks for existing resources BEFORE creating
-func (r *HTTPRouteReconciler) findExistingResource(ctx, route, log) (string, error) {
-    // 1. Calculate expected subdomain from HTTPRoute hostname
-    // 2. Call ListResources() to get all organization resources
-    // 3. Match by subdomain field
-    // 4. Return resourceID if found, empty string if not
+func (r *HTTPRouteReconciler) findExistingResourceBySubdomain(ctx, hostname, log) (string, error) {
+    // 1. List all resources via ListResources()
+    // 2. Match by resource name field (full hostname like "test.dev0ps.me")
+    // 3. Return resourceID if found, empty string if not
 }
 
 // In reconcileHTTPRoute:
+resourceID, _ := r.findExistingResourceBySubdomain(ctx, hostname, log)
 if resourceID == "" {
-    existingResourceID, _ := r.findExistingResource(ctx, route, log)
-    if existingResourceID != "" {
-        // Use existing resource, update label
-    } else {
-        // Create new resource
-    }
+    // Create new resource using hostname as name
+    resourceID = r.createPangolinResourceForHostname(ctx, route, gateway, hostname, hostname, log)
+} else {
+    // Use existing resource (shared across HTTPRoutes)
 }
 ```
-- **Why**: Prevents "Resource with that domain already exists" (409 errors)
-- **Pattern**: Check existence by business key (subdomain), not just K8s label
-- Resources tracked via label `gateway.pangolin.net/resource-id`
+- **Why**: One Pangolin resource per hostname, shared by multiple HTTPRoutes with same hostname
+- **Pattern**: Check existence by resource name (full hostname), not K8s labels
+- Resources no longer stored in HTTPRoute labels (they're shared)
 
 ### Site Naming & Deletion
 - Sites named `pgc-{gateway-name}` (not namespace-based)
@@ -181,16 +179,41 @@ if c.Controller.NewtEndpoint == "" {
 
 ### Reconciliation Idempotency
 - Check if Pangolin resource exists before creating:
-  1. If no label: Call `ListResources()` to find by subdomain
-  2. If has label: Call `ListTargetsRaw()` to verify resource exists
-- For updates: delete old Rules/Targets then recreate (Pangolin API doesn't have PATCH)
-- Finalizers ensure Pangolin resources are cleaned up before K8s resource deletion
-- Target idempotency: Check `ip:port:siteId:path` before creating new target
+  1. Search by resource name (full hostname) via `ListResources()`
+  2. If found, use existing resourceID (shared resource pattern)
+  3. If not found, create new resource with hostname as name
+- **Target Management (Path-based Ownership)**:
+  - Each HTTPRoute only manages targets matching its rule paths
+  - Orphaned target cleanup: Only delete targets whose path matches current HTTPRoute's paths
+  - Prevents deletion loops when multiple HTTPRoutes share same resource
+  - Example: HTTPRoute A manages `/api`, HTTPRoute B manages `/extra` on same resource
+- **Hostname Filtering**:
+  - Skip hostnames that don't match any Pangolin domain
+  - Logs: "Skipping hostname that doesn't match any Pangolin domain"
+  - Prevents invalid resources like "test.example.com.dev0ps.me"
+  - Status: Set to False with "NoMatchingDomains" when all hostnames filtered
+- Finalizers ensure Pangolin resources cleaned up before K8s resource deletion
+- For resource deletion: Only delete resource when all targets removed (shared by multiple HTTPRoutes)
 
 ### Error Handling Strategy
 - Transient errors: requeue with `ctrl.Result{RequeueAfter: 30 * time.Second}`
 - Permanent errors: update status condition with error message, don't requeue
 - API errors: log but continue, will retry on next reconciliation
+
+### Logging Strategy
+- **Info level** (default): Reconciliation events, errors, major state changes
+  - "Reconciling HTTPRoute", "Successfully reconciled HTTPRoute"
+  - "Created Pangolin resource", "Deleting HTTPRoute targets"
+  - "Skipping hostname that doesn't match any Pangolin domain"
+  - Error conditions and failures
+- **V(1) Debug level**: Verbose details for troubleshooting
+  - "Using existing Pangolin resource", "Target already exists with correct configuration"
+  - "Checking domains for hostname", "Extracted subdomain with dot"
+  - "Found existing resource with matching hostname"
+  - "Skipping target with non-matching path (from different HTTPRoute)"
+  - Domain matching details, target drift detection
+- Set via `LOG_LEVEL=debug` environment variable or `--zap-log-level=1` flag
+- Use `log.V(1).Info()` for debug-level logs to reduce noise in production
 
 ## Configuration & Secrets
 
@@ -273,6 +296,8 @@ if c.Controller.NewtEndpoint == "" {
 8. **Resource existence**: Always check `ListResources()` before creating to avoid 409 conflicts
 9. **Controller name conflicts**: Multiple controllers watching same resource need unique names via `.Named()`
 10. **Port mismatches**: Container images have default ports (nginx:80, not 8080) - must match service targetPort
+11. **Shared resource deletion loops**: When multiple HTTPRoutes share a resource, only delete targets matching current HTTPRoute's paths
+12. **Invalid hostnames**: Filter hostnames that don't match Pangolin domains to prevent resources like "test.example.com.dev0ps.me"
 
 ## Key Files Reference
 - Entry point: `cmd/controller/main.go` (controller-runtime setup with all 3 reconcilers)

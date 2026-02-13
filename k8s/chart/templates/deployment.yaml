@@ -53,17 +53,17 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "base.fullname" . }}-credentials
-                  key: api-key
+                  key: apiKey
             - name: PANGOLIN_ORG_ID
               valueFrom:
                 secretKeyRef:
                   name: {{ include "base.fullname" . }}-credentials
-                  key: org-id
+                  key: orgId
             - name: PANGOLIN_BASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "base.fullname" . }}-credentials
-                  key: base-url
+                  key: baseUrl
             {{- if .Values.pangolin.newtEndpoint }}
             - name: NEWT_ENDPOINT
               value: {{ .Values.pangolin.newtEndpoint | quote }}
