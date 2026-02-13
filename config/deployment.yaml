@@ -38,6 +38,7 @@ type: Opaque
 stringData:
   apiKey: "YOUR_PANGOLIN_API_KEY_HERE"
   orgId: "YOUR_PANGOLIN_ORG_ID_HERE"
+  baseUrl: "https://api.pangolin.net/v1"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -70,17 +71,17 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: pangolin-api-credentials
-                  key: api-key
+                  key: apiKey
             - name: PANGOLIN_ORG_ID
               valueFrom:
                 secretKeyRef:
                   name: pangolin-api-credentials
-                  key: org-id
+                  key: orgId
             - name: PANGOLIN_BASE_URL
               valueFrom:
                 secretKeyRef:
                   name: pangolin-api-credentials
-                  key: base-url
+                  key: baseUrl
             - name: ENABLE_LEADER_ELECTION
               value: "true"
             - name: GATEWAY_CLASS_NAME
