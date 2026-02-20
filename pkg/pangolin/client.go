@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
+
+	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 )
 
 const (
@@ -138,6 +141,8 @@ type SiteDefaults struct {
 
 // doRequest performs an HTTP request with authentication
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+	startTime := time.Now()
+
 	var reqBody io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
@@ -163,13 +168,26 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	}
 	defer resp.Body.Close()
 
+	// Record metrics
+	duration := time.Since(startTime).Seconds()
+	statusCode := strconv.Itoa(resp.StatusCode)
+
+	metrics.PangolinAPIRequests.WithLabelValues(path, method, statusCode).Inc()
+	metrics.PangolinAPILatency.WithLabelValues(path, method).Observe(duration)
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		metrics.PangolinAPIErrors.WithLabelValues(path, method, statusCode).Inc()
+		return nil, &PangolinAPIError{
+			StatusCode: resp.StatusCode,
+			Endpoint:   path,
+			Method:     method,
+			Message:    string(respBody),
+		}
 	}
 
 	return respBody, nil

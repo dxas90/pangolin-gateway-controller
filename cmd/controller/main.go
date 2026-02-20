@@ -5,7 +5,8 @@ import (
 	"os"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
-	"github.com/dxas90/pangolin-gateway-controller/pkg/controller"
+	controller2 "github.com/dxas90/pangolin-gateway-controller/pkg/controller"
+	_ "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -97,8 +98,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// TODO: Add exponential backoff rate limiter
+	// Requires: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request]()
+	// See: https://pkg.go.dev/k8s.io/client-go/util/workqueue
+
 	// Setup Gateway controller
-	if err = (&controller.GatewayReconciler{
+	if err = (&controller2.GatewayReconciler{
 		Client:          mgr.GetClient(),
 		Log:             ctrl.Log.WithName("controllers").WithName("Gateway"),
 		Scheme:          mgr.GetScheme(),
@@ -110,7 +115,7 @@ func main() {
 	}
 
 	// Setup GatewayClass controller
-	if err = (&controller.GatewayClassReconciler{
+	if err = (&controller2.GatewayClassReconciler{
 		Client:         mgr.GetClient(),
 		Log:            ctrl.Log.WithName("controllers").WithName("GatewayClass"),
 		Scheme:         mgr.GetScheme(),
@@ -121,7 +126,7 @@ func main() {
 	}
 
 	// Setup HTTPRoute controller
-	if err = (&controller.HTTPRouteReconciler{
+	if err = (&controller2.HTTPRouteReconciler{
 		Client:         mgr.GetClient(),
 		Log:            ctrl.Log.WithName("controllers").WithName("HTTPRoute"),
 		Scheme:         mgr.GetScheme(),
@@ -132,7 +137,7 @@ func main() {
 	}
 
 	// Setup GRPCRoute controller for TCP/UDP services
-	if err = (&controller.GRPCRouteReconciler{
+	if err = (&controller2.GRPCRouteReconciler{
 		Client:         mgr.GetClient(),
 		Log:            ctrl.Log.WithName("controllers").WithName("GRPCRoute"),
 		Scheme:         mgr.GetScheme(),
@@ -143,7 +148,7 @@ func main() {
 	}
 
 	// Setup Newt controller to deploy newt instances for Gateways
-	if err = (&controller.NewtReconciler{
+	if err = (&controller2.NewtReconciler{
 		Client:          mgr.GetClient(),
 		Log:             ctrl.Log.WithName("controllers").WithName("Newt"),
 		Scheme:          mgr.GetScheme(),

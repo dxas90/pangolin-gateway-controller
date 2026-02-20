@@ -100,9 +100,27 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 			}
 			targetID := fmt.Sprintf("%.0f", targetIDFloat)
 
-			// Check if this target belongs to this HTTPRoute by comparing IPs with current service IPs
-			// For now, delete all targets since we don't have metadata tracking
-			// TODO: Add metadata to targets to track which HTTPRoute they belong to
+			// Check if this target belongs to this HTTPRoute using ownership labels
+			shouldDelete := false
+			if labels, ok := target["labels"].(map[string]interface{}); ok {
+				if routeName, ok := labels["gateway.pangolin.net/httproute-name"].(string); ok {
+					if routeNamespace, ok := labels["gateway.pangolin.net/httproute-namespace"].(string); ok {
+						if routeName == route.Name && routeNamespace == route.Namespace {
+							shouldDelete = true
+						}
+					}
+				}
+			} else {
+				// Legacy targets without labels - delete all for safety (backwards compatibility)
+				shouldDelete = true
+				log.V(1).Info("Target has no ownership labels, deleting (legacy target)", "targetId", targetID)
+			}
+
+			if !shouldDelete {
+				log.V(1).Info("Skipping target from different HTTPRoute", "targetId", targetID)
+				continue
+			}
+
 			log.Info("Deleting target", "targetId", targetID, "resourceID", resourceID, "hostname", hostname)
 			if err := r.PangolinClient.DeleteTarget(ctx, targetID); err != nil {
 				log.Error(err, "Failed to delete target", "targetId", targetID)
@@ -360,7 +378,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 		}
 
 		// Create target via Integration API: PUT /resource/{resourceId}/target
-		// Include routing rules (path matching, priority, health checks)
+		// Include routing rules (path matching, priority, health checks) and ownership labels
 		targetData := map[string]interface{}{
 			"siteId":        siteIDInt,
 			"ip":            clusterIP,
@@ -370,6 +388,12 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 			"path":          path,
 			"pathMatchType": pathMatchType,
 			"priority":      priority,
+			// Add ownership labels for proper target tracking
+			"labels": map[string]string{
+				"gateway.pangolin.net/httproute-name":      route.Name,
+				"gateway.pangolin.net/httproute-namespace": route.Namespace,
+				"gateway.pangolin.net/httproute-uid":       string(route.UID),
+			},
 		}
 
 		createdTarget, err := r.PangolinClient.CreateTargetRaw(ctx, resourceID, targetData)

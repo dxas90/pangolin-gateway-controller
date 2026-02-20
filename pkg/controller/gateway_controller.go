@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -60,8 +61,15 @@ type GatewayReconciler struct {
 //   - ctrl.Result: Indicates if/when reconciliation should be retried
 //   - error: Any error encountered during reconciliation
 func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	startTime := time.Now()
 	log := r.Log.WithValues("gateway", req.NamespacedName)
 	log.Info("Reconciling Gateway")
+
+	// Track reconciliation metrics
+	defer func() {
+		duration := time.Since(startTime).Seconds()
+		metrics.ReconcileDuration.WithLabelValues("gateway").Observe(duration)
+	}()
 
 	ctx, cancel := context.WithTimeout(ctx, ReconcileTimeout)
 	defer cancel()
@@ -71,21 +79,34 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.Get(ctx, req.NamespacedName, gateway); err != nil {
 		if errors.IsNotFound(err) {
 			log.Info("Gateway resource not found, likely deleted")
+			metrics.ReconcileTotal.WithLabelValues("gateway", "not_found").Inc()
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Failed to get Gateway")
+		metrics.ReconcileTotal.WithLabelValues("gateway", "error").Inc()
 		return ctrl.Result{}, err
 	}
 
 	// Check if the Gateway is using our GatewayClass
 	if string(gateway.Spec.GatewayClassName) != r.ControllerClass {
 		log.Info("Gateway is not using our GatewayClass, skipping", "class", gateway.Spec.GatewayClassName)
+		metrics.ReconcileTotal.WithLabelValues("gateway", "skipped").Inc()
 		return ctrl.Result{}, nil
 	}
 
+	// Track Gateway count
+	metrics.GatewayTotal.WithLabelValues(gateway.Namespace).Set(1)
+
 	// Handle deletion
 	if !gateway.ObjectMeta.DeletionTimestamp.IsZero() {
-		return r.handleDelete(ctx, gateway, log)
+		result, err := r.handleDelete(ctx, gateway, log)
+		if err != nil {
+			metrics.ReconcileTotal.WithLabelValues("gateway", "error").Inc()
+		} else {
+			metrics.ReconcileTotal.WithLabelValues("gateway", "deleted").Inc()
+			metrics.GatewayTotal.WithLabelValues(gateway.Namespace).Set(0)
+		}
+		return result, err
 	}
 
 	// Add finalizer if not present
@@ -93,12 +114,21 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		controllerutil.AddFinalizer(gateway, FinalizerName)
 		if err := r.Update(ctx, gateway); err != nil {
 			log.Error(err, "Failed to add finalizer")
+			metrics.ReconcileTotal.WithLabelValues("gateway", "error").Inc()
 			return ctrl.Result{}, err
 		}
 	}
 
 	// Reconcile the Gateway
-	return r.reconcileGateway(ctx, gateway, log)
+	result, err := r.reconcileGateway(ctx, gateway, log)
+	if err != nil {
+		metrics.ReconcileTotal.WithLabelValues("gateway", "error").Inc()
+	} else if result.Requeue || result.RequeueAfter > 0 {
+		metrics.ReconcileTotal.WithLabelValues("gateway", "requeue").Inc()
+	} else {
+		metrics.ReconcileTotal.WithLabelValues("gateway", "success").Inc()
+	}
+	return result, err
 }
 
 // handleDelete handles the deletion of a Gateway resource by cleaning up
