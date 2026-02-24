@@ -68,7 +68,7 @@ helm install pangolin-gateway-controller ./k8s/chart \
 | `image.tag` | Controller image tag | `latest` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `pangolin.newtEndpoint` | Newt VPN endpoint (auto-derived if empty) | `""` |
-| `pangolin.newtImage` | Newt VPN image | `fosrl/newt:1.9.0` |
+| `pangolin.newtImage` | Newt VPN image | `fosrl/newt:1.10.0` |
 | `controller.gatewayClassName` | GatewayClass name to watch | `pangolin` |
 | `controller.watchNamespace` | Namespace to watch (empty = all) | `""` |
 | `controller.leaderElection` | Enable leader election | `true` |

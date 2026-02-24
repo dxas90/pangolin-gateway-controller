@@ -33,7 +33,7 @@ pangolin:
   orgId: ""
   baseUrl: "https://api.pangolin.net/v1"
   newtEndpoint: ""
-  newtImage: "fosrl/newt:1.9.0"
+  newtImage: "fosrl/newt:1.10.0"
 
 controller:
   gatewayClassName: "pangolin"

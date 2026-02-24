@@ -40,7 +40,7 @@ controller:
   leaderElectionNamespace: "pangolin-system"
 
   # Docker image for the newt VPN client
-  newtImage: "docker.io/fosrl/newt:1.9.0"
+  newtImage: "docker.io/fosrl/newt:1.10.0"
 
   # Pangolin endpoint for newt VPN authentication (optional, defaults to https://pangolin.net)
   newtEndpoint: "https://pangolin.net"

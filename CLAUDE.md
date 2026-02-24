@@ -155,7 +155,7 @@ PANGOLIN_ORG_ID=xxx
 # Optional (with defaults)
 PANGOLIN_BASE_URL=https://api.pangolin.net/v1
 NEWT_ENDPOINT=https://api.pangolin.net  # Auto-derived from BASE_URL
-NEWT_IMAGE=docker.io/fosrl/newt:1.9.0
+NEWT_IMAGE=docker.io/fosrl/newt:1.10.0
 GATEWAY_CLASS_NAME=pangolin
 WATCH_NAMESPACE=""  # Empty = all namespaces
 ENABLE_LEADER_ELECTION=true

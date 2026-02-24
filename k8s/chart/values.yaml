@@ -49,7 +49,7 @@ pangolin:
   baseUrl: "https://api.pangolin.net/v1"
   # newtEndpoint is auto-derived from baseUrl if not specified
   newtEndpoint: ""
-  newtImage: "fosrl/newt:1.9.1"
+  newtImage: "fosrl/newt:1.10.0"
 
 # Controller Configuration
 controller:

@@ -31,7 +31,7 @@ const (
 	NewtServiceLabel = "gateway.pangolin.net/newt-service"
 
 	// NewtImage is the Docker image for the newt VPN client
-	NewtImage = "docker.io/fosrl/newt:1.9.0"
+	NewtImage = "docker.io/fosrl/newt:1.10.0"
 
 	// NewtWireGuardPort is the UDP port for WireGuard VPN traffic
 	NewtWireGuardPort = 51820
@@ -115,7 +115,7 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 // ensureNewtDeployment creates or updates the complete newt deployment stack
 // for a Gateway. This includes:
 //   - Secret: Contains PANGOLIN_ENDPOINT, NEWT_ID, and NEWT_SECRET
-//   - Deployment: Runs the fosrl/newt:1.9.0 container with WireGuard
+//   - Deployment: Runs the fosrl/newt:1.10.0 container with WireGuard
 //   - Service: Exposes UDP ports 51820 (WireGuard) and 51821 (health check)
 //
 // All resources are owned by the Gateway and will be deleted when the Gateway is deleted.

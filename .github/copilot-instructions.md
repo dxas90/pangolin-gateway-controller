@@ -27,7 +27,7 @@ This is a **Kubernetes Gateway API controller** written in Go that bridges Kuber
 3. **Newt Reconciler** (`pkg/controller/newt_controller.go`):
    - Watches Gateway resources and automatically deploys newt VPN instances
    - Reads credentials from Secret: `{gateway-name}-newt-cred`
-   - Deploys newt Deployment with WireGuard container (configurable via `NEWT_IMAGE`, default: fosrl/newt:1.9.0)
+   - Deploys newt Deployment with WireGuard container (configurable via `NEWT_IMAGE`, default: fosrl/newt:1.10.0)
    - Creates ClusterIP Service for WireGuard ports (51820, 51821 UDP)
    - All resources use OwnerReferences to Gateway for automatic cleanup
    - **Newt endpoint auto-derived**: If API is `api.example.com`, newt connects to `pangolin.example.com`
@@ -222,7 +222,7 @@ if c.Controller.NewtEndpoint == "" {
   PANGOLIN_API_KEY, PANGOLIN_ORG_ID (required)
   PANGOLIN_BASE_URL=https://api.pangolin.net/v1 (Integration API)
   NEWT_ENDPOINT=https://api.pangolin.net (optional, auto-derived from BASE_URL)
-  NEWT_IMAGE=docker.io/fosrl/newt:1.9.0
+  NEWT_IMAGE=docker.io/fosrl/newt:1.10.0
   GATEWAY_CLASS_NAME=pangolin
   WATCH_NAMESPACE="" (empty = all namespaces)
   LOG_LEVEL=info|debug

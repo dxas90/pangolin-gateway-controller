@@ -34,7 +34,7 @@ This project implements a production-ready Kubernetes Gateway API controller tha
 ### 2.5 **Newt VPN Controller** (`pkg/controller/newt_controller.go`)
 
 - Watches Gateway resources and deploys WireGuard VPN instances
-- Creates Deployment with fosrl/newt:1.9.0 container
+- Creates Deployment with fosrl/newt:1.10.0 container
 - Creates ClusterIP Service for WireGuard ports (51820, 51821 UDP)
 - Auto-derives endpoint: `api.example.com` → `pangolin.example.com`
 - Uses OwnerReferences for automatic cleanup

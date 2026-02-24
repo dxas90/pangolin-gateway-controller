@@ -142,7 +142,7 @@ func (c *Config) ApplyDefaults() {
 	}
 
 	if c.Controller.NewtImage == "" {
-		c.Controller.NewtImage = "docker.io/fosrl/newt:1.9.0"
+		c.Controller.NewtImage = "docker.io/fosrl/newt:1.10.0"
 	}
 
 	if c.Controller.NewtEndpoint == "" {
