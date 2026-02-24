@@ -378,7 +378,8 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 		}
 
 		// Create target via Integration API: PUT /resource/{resourceId}/target
-		// Include routing rules (path matching, priority, health checks) and ownership labels
+		// Include routing rules (path matching, priority, health checks)
+		// Note: labels field not supported by Integration API, only used internally by Pangolin UI
 		targetData := map[string]interface{}{
 			"siteId":        siteIDInt,
 			"ip":            clusterIP,
@@ -388,12 +389,6 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 			"path":          path,
 			"pathMatchType": pathMatchType,
 			"priority":      priority,
-			// Add ownership labels for proper target tracking
-			"labels": map[string]string{
-				"gateway.pangolin.net/httproute-name":      route.Name,
-				"gateway.pangolin.net/httproute-namespace": route.Namespace,
-				"gateway.pangolin.net/httproute-uid":       string(route.UID),
-			},
 		}
 
 		createdTarget, err := r.PangolinClient.CreateTargetRaw(ctx, resourceID, targetData)
