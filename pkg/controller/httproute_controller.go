@@ -622,25 +622,21 @@ func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Cont
 	}
 
 	// Check if user wants to disable SSO via annotation
-	disableSSO := false // Default: disable SSO
+	disableSSO := false // Default: SSO remains enabled
 	if val, ok := route.Annotations["gateway.pangolin.net/disable-sso"]; ok && val == "true" {
 		disableSSO = true
 	}
 
 	if disableSSO {
-		// Disable SSO using PATCH /resource/{resourceId} with {"sso":false}
-		log.V(1).Info("Attempting to disable SSO via PATCH", "resourceID", resourceID)
-		patchData := map[string]interface{}{
-			"sso":         false,
-			"skipToIdpId": 1,
-		}
-		if err := r.PangolinClient.DisableSSO(ctx, resourceID, patchData); err != nil {
-			log.Error(err, "Failed to PATCH SSO disable - trying fallback POST /roles method", "resourceID", resourceID)
+		log.V(1).Info("Disabling SSO for resource", "resourceID", resourceID)
+		if err := r.PangolinClient.DisableSSO(ctx, resourceID); err != nil {
+			log.Error(err, "Failed to disable SSO", "resourceID", resourceID)
+			// Don't fail resource creation if SSO disable fails
 		} else {
-			log.Info("Successfully disabled SSO via PATCH", "resourceID", resourceID)
+			log.Info("Successfully disabled SSO", "resourceID", resourceID)
 		}
 	} else {
-		log.Info("SSO remains enabled (annotation gateway.pangolin.net/disable-sso=true)", "resourceID", resourceID)
+		log.V(1).Info("SSO remains enabled (use annotation gateway.pangolin.net/disable-sso=true to disable)", "resourceID", resourceID)
 	}
 
 	log.Info("Created Pangolin resource", "resourceID", resourceID, "name", resourceName, "subdomain", subdomain)

@@ -269,16 +269,19 @@ if c.Controller.NewtEndpoint == "" {
   - ✅ `DELETE /target/{targetId}` - Works for deleting targets
   - ✅ `POST /resource/{resourceId}/roles` - Sets allowed roles (empty array = no role restrictions)
   - ❌ `PATCH /resource/{resourceId}` - **Not supported in Integration API** (only in UI API)
-- **Resource schema**: `{name, subdomain, http:boolean, protocol:"tcp"|"udp", domainId:string, stickySession:boolean}`
-- **SSO Limitation** (Critical Discovery):
-  - **Root cause**: SSO disable requires TWO API calls:
-    1. `POST /resource/{resourceId}/roles` with `{"roleIds":[]}` ✅ Available in Integration API
-    2. `PATCH /resource/{resourceId}` with `{"sso":false}` ❌ **Only in UI API**
-  - Integration API lacks PATCH endpoint, so controller can only do step 1
-  - Result: POST /roles succeeds, but sso remains true without the PATCH
-  - **Workaround**: Manually disable SSO in Pangolin UI after resource creation
-  - Resources with sso:true require authentication (returns 503/auth required)
-  - Use annotation `gateway.pangolin.net/disable-sso=false` to skip SSO disable attempt
+  - ✅ `POST /resource/{resourceId}` - Updates resource fields (Pangolin 1.15.4: sso, skipToIdpId, maintenanceModeEnabled, maintenanceModeType, maintenanceTitle, maintenanceMessage, maintenanceEstimatedTime, postAuthPath)
+- **Resource schema**: `{name, subdomain, http:boolean, protocol:"tcp"|"udp", domainId:string, stickySession:boolean, postAuthPath?:string}`
+- **Pangolin API Version Compatibility**:
+  - **Tested with**: Pangolin 1.15.4 (February 2026)
+  - **Breaking changes**: None between 1.15.0 → 1.15.4
+  - **New features in 1.15.4**:
+    * `postAuthPath` field (optional) - Redirect path after authentication
+    * `verifyLimits` middleware added to all endpoints (SaaS builds only)
+- **SSO Configuration** (verified in Pangolin 1.15.4):
+  - **Working in Integration API**: `POST /resource/{resourceId}` with `{"sso":false,"skipToIdpId":null}`
+  - Controller implementation (v14+): Directly disables SSO via POST endpoint
+  - Use annotation `gateway.pangolin.net/disable-sso=true` to disable SSO on resource creation
+  - Successfully tested with both Integration API (Bearer token) and UI API (session cookie)
 - **Target schema**: `{siteId:int, ip:string, port:int, enabled:boolean, ...health check fields}`
   - Use ClusterIP or Pod IP, not DNS names (newt may not resolve cluster DNS)
 - Cloud API (api.pangolin.net) may have full CRUD support

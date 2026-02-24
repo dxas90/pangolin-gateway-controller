@@ -486,11 +486,26 @@ func (c *Client) CreateTargetRaw(ctx context.Context, resourceID string, targetD
 	return response.Data, nil
 }
 
-// DisableSSO disables SSO for a resource by setting empty roles
-// Endpoint: POST /resource/{resourceId} with {"roleIds":[]}
-func (c *Client) DisableSSO(ctx context.Context, resourceID string, patchData map[string]interface{}) error {
+// SetResourceRoles sets the allowed roles for a resource
+// Endpoint: POST /resource/{resourceId}/roles
+func (c *Client) SetResourceRoles(ctx context.Context, resourceID string, roleIDs []string) error {
+	path := fmt.Sprintf("/resource/%s/roles", resourceID)
+	payload := map[string]interface{}{
+		"roleIds": roleIDs,
+	}
+	_, err := c.doRequest(ctx, http.MethodPost, path, payload)
+	return err
+}
+
+// DisableSSO disables SSO for a resource
+// Endpoint: POST /resource/{resourceId} with {"sso":false,"skipToIdpId":null}
+func (c *Client) DisableSSO(ctx context.Context, resourceID string) error {
 	path := fmt.Sprintf("/resource/%s", resourceID)
-	_, err := c.doRequest(ctx, http.MethodPost, path, patchData)
+	payload := map[string]interface{}{
+		"sso":         false,
+		"skipToIdpId": nil,
+	}
+	_, err := c.doRequest(ctx, http.MethodPost, path, payload)
 	return err
 }
 
