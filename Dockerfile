@@ -38,6 +38,12 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # Binary
 COPY --from=builder /workspace/controller /controller
 
+LABEL org.opencontainers.image.authors="Daniel Ramirez <dxas90@gmail.com>" \
+    org.opencontainers.image.description="A container image for the Pangolin Gateway Controller." \
+    org.opencontainers.image.licenses="MIT" \
+    org.opencontainers.image.source="https://github.com/dxas90/pangolin-gateway-controller" \
+    org.opencontainers.image.title="pangolin-gateway-controller Image"
+
 # Non-root (same UID you used before)
 USER 65532:65532
 
