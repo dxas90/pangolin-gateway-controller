@@ -117,6 +117,12 @@ func (m *MockPangolinClient) ListDomains(ctx context.Context) ([]map[string]inte
 	return args.Get(0).([]map[string]interface{}), args.Error(1)
 }
 
+// GetServerVersion mocks the GetServerVersion method.
+func (m *MockPangolinClient) GetServerVersion(ctx context.Context, newtEndpoint, newtID, newtSecret string) (string, error) {
+	args := m.Called(ctx, newtEndpoint, newtID, newtSecret)
+	return args.String(0), args.Error(1)
+}
+
 // NewMockPangolinClient creates a new mock Pangolin client.
 func NewMockPangolinClient() *MockPangolinClient {
 	return &MockPangolinClient{}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
@@ -22,6 +23,17 @@ const (
 
 	// DefaultTimeout is the default HTTP client timeout
 	DefaultTimeout = 30 * time.Second
+
+	// listPageSize is the number of items to request per page when listing
+	// sites or resources. Pangolin 1.16.0+ changed the default from 1000→20;
+	// we request 1000 at a time to minimise round-trips while still being
+	// safe against deployments with many objects.
+	listPageSize = 1000
+
+	// listMaxPages is a safety cap on pagination loops to prevent runaway
+	// requests if the server returns unexpectedly large or inconsistent
+	// pagination metadata.
+	listMaxPages = 100
 )
 
 // Client is a REST API client for the Pangolin Integration API.
@@ -429,25 +441,66 @@ func (c *Client) GetSite(ctx context.Context, siteID string) (*Site, error) {
 	return &result, nil
 }
 
-// ListSites lists all sites for the organization
+// ListSites lists all sites for the organization, transparently paginating
+// through all pages. Pangolin 1.16.0+ changed the default page size from
+// 1000 to 20, so we explicitly request listPageSize items per page.
+//
+// Backward-compatible: older servers treat unknown query params as no-ops
+// and still return up to their default limit (1000).
 func (c *Client) ListSites(ctx context.Context) ([]Site, error) {
-	path := fmt.Sprintf("/org/%s/sites", c.OrgID)
-	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// API returns {"data": {"sites": [...]}}
-	var response struct {
+	type paginatedResponse struct {
 		Data struct {
-			Sites []Site `json:"sites"`
+			Sites      []Site `json:"sites"`
+			Pagination struct {
+				Total    int `json:"total"`
+				PageSize int `json:"pageSize"`
+				Page     int `json:"page"`
+				// Legacy fields (Pangolin < 1.16.0)
+				Limit  int `json:"limit"`
+				Offset int `json:"offset"`
+			} `json:"pagination"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+
+	var allSites []Site
+	basePath := fmt.Sprintf("/org/%s/sites", c.OrgID)
+
+	for page := 1; page <= listMaxPages; page++ {
+		path := fmt.Sprintf("%s?pageSize=%d&page=%d", basePath, listPageSize, page)
+		respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var resp paginatedResponse
+		if err := json.Unmarshal(respBody, &resp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal list sites response (page %d): %w", page, err)
+		}
+
+		allSites = append(allSites, resp.Data.Sites...)
+
+		// Determine the effective page size — newer API returns pageSize,
+		// older API returns limit; fall back to listPageSize if both are zero.
+		effPageSize := resp.Data.Pagination.PageSize
+		if effPageSize == 0 {
+			effPageSize = resp.Data.Pagination.Limit
+		}
+		if effPageSize == 0 {
+			effPageSize = listPageSize
+		}
+
+		// Stop when we've collected all items or the page came back empty.
+		if len(resp.Data.Sites) == 0 || len(allSites) >= resp.Data.Pagination.Total {
+			break
+		}
+		// Also stop if the server returned fewer items than requested
+		// (last page).
+		if len(resp.Data.Sites) < effPageSize {
+			break
+		}
 	}
 
-	return response.Data.Sites, nil
+	return allSites, nil
 }
 
 // DeleteSite deletes a site by ID
@@ -561,26 +614,66 @@ func (c *Client) ListDomains(ctx context.Context) ([]map[string]interface{}, err
 	return response.Data.Domains, nil
 }
 
-// ListResources lists all resources for the organization
-// Endpoint: GET /org/{orgId}/resources
+// ListResources lists all resources for the organization, transparently
+// paginating through all pages. Pangolin 1.16.0+ changed the default page
+// size from 1000 to 20, so we explicitly request listPageSize items per page.
+//
+// Backward-compatible: older servers treat unknown query params as no-ops
+// and still return up to their default limit (1000).
 func (c *Client) ListResources(ctx context.Context) ([]map[string]interface{}, error) {
-	path := fmt.Sprintf("/org/%s/resources", c.OrgID)
-	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// API returns {"data": {"resources": [...]}}
-	var response struct {
+	type paginatedResponse struct {
 		Data struct {
-			Resources []map[string]interface{} `json:"resources"`
+			Resources  []map[string]interface{} `json:"resources"`
+			Pagination struct {
+				Total    int `json:"total"`
+				PageSize int `json:"pageSize"`
+				Page     int `json:"page"`
+				// Legacy fields (Pangolin < 1.16.0)
+				Limit  int `json:"limit"`
+				Offset int `json:"offset"`
+			} `json:"pagination"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+
+	var allResources []map[string]interface{}
+	basePath := fmt.Sprintf("/org/%s/resources", c.OrgID)
+
+	for page := 1; page <= listMaxPages; page++ {
+		path := fmt.Sprintf("%s?pageSize=%d&page=%d", basePath, listPageSize, page)
+		respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var resp paginatedResponse
+		if err := json.Unmarshal(respBody, &resp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal list resources response (page %d): %w", page, err)
+		}
+
+		allResources = append(allResources, resp.Data.Resources...)
+
+		// Determine the effective page size — newer API returns pageSize,
+		// older API returns limit; fall back to listPageSize if both are zero.
+		effPageSize := resp.Data.Pagination.PageSize
+		if effPageSize == 0 {
+			effPageSize = resp.Data.Pagination.Limit
+		}
+		if effPageSize == 0 {
+			effPageSize = listPageSize
+		}
+
+		// Stop when we've collected all items or the page came back empty.
+		if len(resp.Data.Resources) == 0 || len(allResources) >= resp.Data.Pagination.Total {
+			break
+		}
+		// Also stop if the server returned fewer items than requested
+		// (last page).
+		if len(resp.Data.Resources) < effPageSize {
+			break
+		}
 	}
 
-	return response.Data.Resources, nil
+	return allResources, nil
 }
 
 // ListTargetsRaw lists all targets for a resource via Integration API
@@ -603,4 +696,66 @@ func (c *Client) ListTargetsRaw(ctx context.Context, resourceID string) ([]map[s
 	}
 
 	return response.Data.Targets, nil
+}
+
+// GetServerVersion queries the Pangolin server version by performing the same
+// newt authentication handshake that the newt VPN client performs on startup.
+// The server embeds its version string in the token response.
+//
+// newtEndpoint is the Pangolin VPN server URL (e.g., "https://pangolin.example.com"),
+// newtID and newtSecret are the credentials returned by PickSiteDefaults.
+//
+// Returns the version string (e.g., "1.15.4") or an error if the call fails.
+// A failure is non-fatal — callers should log and continue rather than abort.
+func (c *Client) GetServerVersion(ctx context.Context, newtEndpoint, newtID, newtSecret string) (string, error) {
+	type tokenRequest struct {
+		NewtID string `json:"newtId"`
+		Secret string `json:"secret"`
+	}
+	type tokenResponse struct {
+		Data struct {
+			Token         string `json:"token"`
+			ServerVersion string `json:"serverVersion"`
+		} `json:"data"`
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+
+	payload, err := json.Marshal(tokenRequest{NewtID: newtID, Secret: newtSecret})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal token request: %w", err)
+	}
+
+	endpoint := strings.TrimRight(newtEndpoint, "/") + "/api/v1/auth/newt/get-token"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBuffer(payload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create version request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to reach newt auth endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("newt auth endpoint returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp tokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", fmt.Errorf("failed to decode token response: %w", err)
+	}
+
+	if !tokenResp.Success {
+		return "", fmt.Errorf("newt auth request rejected: %s", tokenResp.Message)
+	}
+
+	return tokenResp.Data.ServerVersion, nil
 }

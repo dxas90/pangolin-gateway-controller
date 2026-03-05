@@ -241,50 +241,93 @@ if c.Controller.NewtEndpoint == "" {
 - RBAC requires: Gateway API resources, Secrets, Deployments, Services (full CRUD)
 - Leader election via `coordination.k8s.io/leases` in pangolin-system namespace
 
+### API Reference Sources
+- **`references/newt/`** - newt VPN client source code (Go). Use this to verify websocket/auth endpoints and token request/response types.
+- **`references/pangolin/server/routers/`** - Pangolin server router source (TypeScript). **Authoritative source for all API endpoints**, request schemas, and response structures.
+  - `integration.ts` — all Integration API routes (Bearer token)
+  - `external.ts` — all UI/external API routes (session cookie)
+  - `resource/`, `target/`, `site/`, `newt/` — handler implementations with Zod schemas
+
 ### Pangolin Integration API Endpoints
+All confirmed from `references/pangolin/server/routers/integration.ts`. Bearer token auth, prefix `/v1`.
+
+**Site endpoints:**
 - `GET /org/{orgId}/pick-site-defaults` - Auto-allocate subnet, exit node, credentials
 - `PUT /org/{orgId}/site` - Create site (doesn't return credentials!)
-- `GET /org/{orgId}/sites` - List sites (note: plural)
+- `GET /org/{orgId}/sites` - List sites (note: plural) — response: `{"data":{"sites":[...]}}`
+- `GET /org/{orgId}/site/{niceId}` - Get site by niceId
+- `GET /site/{siteId}` - Get site by numeric ID
+- `POST /site/{siteId}` - Update site
 - `DELETE /site/{siteId}` - Delete site (no org in path)
-- `GET /org/{orgId}/resources` - List all resources (for idempotency checking)
-- `PUT /org/{orgId}/resource` - Create resource (returns resourceId)
-- `GET /resource/{resourceId}/targets` - List targets (verify resource exists)
-- `PUT /resource/{resourceId}/target` - Create target with routing properties
+
+**Resource endpoints:**
+- `GET /org/{orgId}/resources` - List all resources — response: `{"data":{"resources":[...],"pagination":{...}}}`
+  - Each resource includes embedded `targets[]` array with `{targetId, ip, port, enabled, healthStatus}`
+- `PUT /org/{orgId}/resource` - Create resource — response: `{"data": Resource}`
+- `PUT /org/{orgId}/site/{siteId}/resource` - Create resource scoped to site
+- `GET /resource/{resourceId}` - Get resource by numeric ID
+- `POST /resource/{resourceId}` - Update resource fields (sso, skipToIdpId, name, subdomain, ssl, blockAccess, domainId, enabled, stickySession, maintenanceModeEnabled, maintenanceModeType, maintenanceTitle, maintenanceMessage, maintenanceEstimatedTime, postAuthPath)
 - `DELETE /resource/{resourceId}` - Delete resource
+- `POST /resource/{resourceId}/roles` - Set allowed roles (empty array = no role restrictions)
+
+**Site-Resource endpoints** (different from Resource — links a resource to a site):
+- `PUT /org/{orgId}/site-resource` - Create site-resource
+- `GET /org/{orgId}/site-resources` - List all site-resources for org
+- `GET /org/{orgId}/site/{siteId}/resources` - List resources for a site
+- `GET /site-resource/{siteResourceId}` - Get site-resource
+- `POST /site-resource/{siteResourceId}` - Update site-resource
+- `DELETE /site-resource/{siteResourceId}` - Delete site-resource
+- `POST /site-resource/{siteResourceId}/roles` - Set roles on site-resource
+
+**Target endpoints:**
+- `PUT /resource/{resourceId}/target` - Create target — schema: `{siteId:int, ip:string, port:int, enabled:bool, path?, pathMatchType?, rewritePath?, rewritePathType?, priority?, hcEnabled?, ...}`
+- `GET /resource/{resourceId}/targets` - List targets — response: `{"data":{"targets":[...]}}`
+- `GET /target/{targetId}` - Get target
+- `POST /target/{targetId}` - Update target
 - `DELETE /target/{targetId}` - Delete target
-- All use JSON payloads with `{"data": {...}}` wrapper, Bearer token in `Authorization` header
+
+**Resource routing rules:**
+- `PUT /resource/{resourceId}/rule` - Create routing rule
+- `GET /resource/{resourceId}/rules` - List rules
+- `POST /resource/{resourceId}/rule/{ruleId}` - Update rule
+- `DELETE /resource/{resourceId}/rule/{ruleId}` - Delete rule
+
+**Domain/other:**
+- `GET /org/{orgId}/domains` - List domains — response: `{"data":{"domains":[...]}}`
+
+All endpoints: JSON payloads, `{"data": {...}}` response wrapper, `Authorization: Bearer <key>` header.
+
+### Pangolin External (UI) API Endpoints
+Served at `pangolin.example.com/api/v1` (session cookie auth). **Not accessible via Integration API key.**
+- `GET /api/v1/server-info` - Returns `{version, supporterStatusValid, build, enterpriseLicenseValid, enterpriseLicenseType}` — requires session cookie
+- `POST /api/v1/auth/newt/get-token` - Newt VPN authentication; returns `{data:{token, serverVersion}}` — **no auth required!** This is how `GetServerVersion()` works.
+- All normal UI actions (auth, user management, etc.)
 
 **Integration API Limitations:**
-- Official API docs show full support for SiteResource/Rules/Targets CRUD operations
-- Self-hosted Integration API versions (e.g., example.com) may have limited endpoints
-- **TWO SEPARATE APIS**: Integration API (`api.example.com`) vs UI API (`pangolin.example.com/api`)
+- **TWO SEPARATE APIS**: Integration API (`api.example.com/v1`) vs UI API (`pangolin.example.com/api/v1`)
   - Integration API: Bearer token auth, used by controller
   - UI API: Session cookie auth, used by web interface
   - Different capabilities and endpoints!
-- **Endpoint differences** (Integration API):
-  - ❌ `PUT /org/{orgId}/site-resource` - Returns "Cannot PUT"
-  - ✅ `PUT /org/{orgId}/resource` - Works for creating resources
-  - ✅ `PUT /resource/{resourceId}/target` - Works for creating targets
-  - ✅ `DELETE /resource/{resourceId}` - Works for deleting resources
-  - ✅ `DELETE /target/{targetId}` - Works for deleting targets
-  - ✅ `POST /resource/{resourceId}/roles` - Sets allowed roles (empty array = no role restrictions)
-  - ❌ `PATCH /resource/{resourceId}` - **Not supported in Integration API** (only in UI API)
-  - ✅ `POST /resource/{resourceId}` - Updates resource fields (Pangolin 1.15.4: sso, skipToIdpId, maintenanceModeEnabled, maintenanceModeType, maintenanceTitle, maintenanceMessage, maintenanceEstimatedTime, postAuthPath)
-- **Resource schema**: `{name, subdomain, http:boolean, protocol:"tcp"|"udp", domainId:string, stickySession:boolean, postAuthPath?:string}`
+- **No version endpoint on Integration API** — use `GetServerVersion()` (calls newt auth token endpoint) to detect server version
+- ❌ `PATCH /resource/{resourceId}` - Not supported in Integration API (only in UI API)
+- ❌ `GET /v1/version` or similar - Does not exist on Integration API
+- **Resource schema** (createResource): `{name:string, http:boolean, protocol:"tcp"|"udp", domainId:string, subdomain?:string, stickySession?:boolean, postAuthPath?:string}`
+  - For raw (non-HTTP) resources: `{name:string, http:false, protocol:"tcp"|"udp", proxyPort:int}` (requires `allow_raw_resources` flag)
 - **Pangolin API Version Compatibility**:
-  - **Tested with**: Pangolin 1.15.4 (February 2026)
-  - **Breaking changes**: None between 1.15.0 → 1.15.4
-  - **New features in 1.15.4**:
-    * `postAuthPath` field (optional) - Redirect path after authentication
-    * `verifyLimits` middleware added to all endpoints (SaaS builds only)
+  - **Tested with**: Pangolin 1.16.2 (latest as of March 2026)
+  - **Reference source**: `references/pangolin/` contains server source code at tag `1.16.2`
+  - **Breaking change in 1.16.0**: `GET /org/{orgId}/sites` and `GET /org/{orgId}/resources` changed pagination params:
+    - Old (≤1.15.x): `?limit=1000&offset=0` — default was 1000 items
+    - New (1.16.0+): `?pageSize=20&page=1` — default dropped to **20 items**
+    - Our client passes `?pageSize=1000&page=N` and paginates through all pages (see `listPageSize`/`listMaxPages` constants)
+    - Backward-compatible: old servers ignore unknown query params and return their default
+  - `verifyLimits` middleware on mutating endpoints (SaaS builds only)
 - **SSO Configuration** (verified in Pangolin 1.15.4):
   - **Working in Integration API**: `POST /resource/{resourceId}` with `{"sso":false,"skipToIdpId":null}`
   - Controller implementation (v14+): Directly disables SSO via POST endpoint
   - Use annotation `gateway.pangolin.net/disable-sso=true` to disable SSO on resource creation
-  - Successfully tested with both Integration API (Bearer token) and UI API (session cookie)
 - **Target schema**: `{siteId:int, ip:string, port:int, enabled:boolean, ...health check fields}`
   - Use ClusterIP or Pod IP, not DNS names (newt may not resolve cluster DNS)
-- Cloud API (api.pangolin.net) may have full CRUD support
 - Client code includes wrapped response handling (`{"data": {...}}`) for all endpoints
 
 ## Common Pitfalls

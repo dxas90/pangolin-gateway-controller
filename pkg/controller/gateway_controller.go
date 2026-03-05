@@ -201,6 +201,15 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 				log.Error(err, "Failed to create newt credentials secret")
 				return ctrl.Result{}, err
 			}
+			// Query the Pangolin server version via the newt auth handshake.
+			// This is non-fatal — log the result and continue regardless.
+			if r.Config != nil && r.Config.NewtEndpoint != "" {
+				if version, verErr := r.PangolinClient.GetServerVersion(ctx, r.Config.NewtEndpoint, site.NewtID, site.Secret); verErr != nil {
+					log.Info("Could not determine Pangolin server version", "error", verErr.Error())
+				} else {
+					log.Info("Connected to Pangolin server", "serverVersion", version)
+				}
+			}
 		} else {
 			log.Info("Site already existed in Pangolin; preserving existing newt credentials secret")
 		}

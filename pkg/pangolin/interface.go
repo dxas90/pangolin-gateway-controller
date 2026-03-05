@@ -27,6 +27,10 @@ type ClientInterface interface {
 
 	// Domain operations
 	ListDomains(ctx context.Context) ([]map[string]interface{}, error)
+
+	// Version detection — queries the Pangolin server version via the newt auth
+	// token endpoint (same mechanism the newt VPN client uses on startup).
+	GetServerVersion(ctx context.Context, newtEndpoint, newtID, newtSecret string) (string, error)
 }
 
 // Ensure Client implements ClientInterface

@@ -240,6 +240,15 @@ curl -H "Authorization: Bearer $PANGOLIN_API_KEY" \
 - Import path: `gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"`
 - Use `metav1.Condition` for status, NOT `gatewayv1.Condition`
 
+## Pangolin API Version Compatibility
+
+- **Targeting**: Pangolin 1.16.2 (latest as of March 2026, tag `1.16.2` in `references/pangolin/`)
+- **Breaking change in 1.16.0**: `GET /org/{orgId}/sites` and `GET /org/{orgId}/resources` changed pagination:
+  - Old (≤1.15.x): `?limit=1000&offset=0` — **default 1000 items**
+  - New (1.16.0+): `?pageSize=20&page=1` — **default dropped to 20 items**
+  - Fix: client now passes `?pageSize=1000&page=N` and paginates (constants: `listPageSize=1000`, `listMaxPages=100`)
+  - Backward-compatible: old servers ignore unknown query params and return their own default
+
 ## Common Pitfalls
 
 1. **Missing GatewayClass filter**: Always check `gateway.Spec.GatewayClassName == r.ControllerClass`
