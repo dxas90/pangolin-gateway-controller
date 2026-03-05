@@ -215,6 +215,13 @@ func (r *GRPCRouteReconciler) verifyOrRecreateResource(ctx context.Context, rout
 
 // reconcileTargets creates or updates backend targets in Pangolin
 func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatewayv1.GRPCRoute, resourceID, siteID string, gateway *gatewayv1.Gateway, log logr.Logger) error {
+	// Check for context cancellation before starting expensive operations
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Collect all unique backends from all rules
 	backendMap := make(map[string]gatewayv1.BackendRef)
 
@@ -244,6 +251,13 @@ func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 	// Get Service ClusterIP for each backend
 	for key, backendRef := range backendMap {
+		// Check for context cancellation in loop
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		serviceName := string(backendRef.Name)
 		serviceNamespace := route.Namespace
 		if backendRef.Namespace != nil {
@@ -280,6 +294,13 @@ func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 		if targetExists {
 			continue
+		}
+
+		// Check for context cancellation before create operation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		// Create target via Integration API: PUT /resource/{resourceId}/target

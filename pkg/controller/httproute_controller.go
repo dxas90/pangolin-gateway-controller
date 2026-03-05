@@ -86,6 +86,13 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 	// Delete only the targets belonging to this HTTPRoute
 	// Resources are shared across HTTPRoutes with the same hostname
 	for _, hostname := range route.Spec.Hostnames {
+		// Check for context cancellation in hostname loop
+		select {
+		case <-ctx.Done():
+			return ctrl.Result{}, ctx.Err()
+		default:
+		}
+
 		// Find the resource for this hostname (search by resource name)
 		resourceID, err := r.findExistingResourceBySubdomain(ctx, string(hostname), log)
 		if err != nil || resourceID == "" {
@@ -103,6 +110,13 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 		// Delete targets that belong to this HTTPRoute (match by route namespace/name in target metadata)
 		targetsDeleted := 0
 		for _, target := range existingTargets {
+			// Check for context cancellation in target deletion loop
+			select {
+			case <-ctx.Done():
+				return ctrl.Result{}, ctx.Err()
+			default:
+			}
+
 			targetIDFloat, ok := target["targetId"].(float64)
 			if !ok {
 				continue
@@ -272,6 +286,13 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 		return fmt.Errorf("invalid site ID %s: %w", siteID, err)
 	}
 
+	// Check for context cancellation before starting expensive operations
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Get existing targets from Pangolin
 	existingTargets, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
 	if err != nil {
@@ -284,6 +305,12 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 	// Create targets for each rule (not just each backend)
 	for ruleIdx, rule := range route.Spec.Rules {
+		// Check for context cancellation in loop
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if len(rule.BackendRefs) == 0 {
 			log.V(1).Info("Skipping rule with no backends", "ruleIndex", ruleIdx)
 			continue
@@ -380,11 +407,25 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 		// If target exists but has drifted, delete it first
 		if targetExists && needsUpdate {
+			// Check for context cancellation before delete operation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			log.V(1).Info("Deleting drifted target", "targetId", existingTargetID)
 			if err := r.PangolinClient.DeleteTarget(ctx, existingTargetID); err != nil {
 				log.Error(err, "Failed to delete drifted target", "targetId", existingTargetID)
 				// Continue to try recreating anyway
 			}
+		}
+
+		// Check for context cancellation before create operation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		// Create target via Integration API: PUT /resource/{resourceId}/target
@@ -427,6 +468,13 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	// Clean up orphaned targets that belong to this HTTPRoute's paths
 	// Only delete targets whose path matches one of this HTTPRoute's rule paths
 	for _, existingTarget := range existingTargets {
+		// Check for context cancellation in cleanup loop
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		existingTargetID := fmt.Sprintf("%v", existingTarget["targetId"])
 		targetPath := fmt.Sprintf("%v", existingTarget["path"])
 
