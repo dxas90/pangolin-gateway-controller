@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -17,7 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -49,10 +53,11 @@ type NewtReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
 	Log             logr.Logger
-	PangolinClient  *pangolin.Client
+	PangolinClient  pangolin.ClientInterface
 	PangolinBaseURL string
 	NewtEndpoint    string
 	NewtImage       string
+	Config          *config.ControllerConfig
 	Recorder        record.EventRecorder
 }
 
@@ -124,20 +129,20 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 func (r *NewtReconciler) ensureNewtDeployment(ctx context.Context, gateway *gatewayv1.Gateway, site *pangolin.Site, log logr.Logger) error {
 	// Create secret with newt credentials
 	secret := r.buildNewtSecret(gateway, site)
-	if err := r.createOrUpdateSecret(ctx, secret); err != nil {
-		return fmt.Errorf("failed to create newt secret: %w", err)
+	if err := r.applyResource(ctx, secret); err != nil {
+		return fmt.Errorf("failed to apply newt secret: %w", err)
 	}
 
 	// Create deployment
 	deployment := r.buildNewtDeployment(gateway, site)
-	if err := r.createOrUpdateDeployment(ctx, deployment); err != nil {
-		return fmt.Errorf("failed to create newt deployment: %w", err)
+	if err := r.applyResource(ctx, deployment); err != nil {
+		return fmt.Errorf("failed to apply newt deployment: %w", err)
 	}
 
 	// Create service
 	service := r.buildNewtService(gateway, site)
-	if err := r.createOrUpdateService(ctx, service); err != nil {
-		return fmt.Errorf("failed to create newt service: %w", err)
+	if err := r.applyResource(ctx, service); err != nil {
+		return fmt.Errorf("failed to apply newt service: %w", err)
 	}
 
 	log.Info("Newt deployment ensured", "siteID", site.ID, "deployment", deployment.Name)
@@ -384,62 +389,27 @@ func (r *NewtReconciler) buildNewtService(gateway *gatewayv1.Gateway, site *pang
 }
 
 // Helper functions to create or update resources
-// createOrUpdateSecret creates a new Secret or updates it if it already exists
-func (r *NewtReconciler) createOrUpdateSecret(ctx context.Context, secret *corev1.Secret) error {
-	existing := &corev1.Secret{}
-	err := r.Get(ctx, client.ObjectKey{Name: secret.Name, Namespace: secret.Namespace}, existing)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return r.Create(ctx, secret)
-		}
-		return err
-	}
-	// Update existing secret
-	existing.StringData = secret.StringData
-	return r.Update(ctx, existing)
-}
-
-// createOrUpdateDeployment creates a new Deployment or updates it if it already exists
-func (r *NewtReconciler) createOrUpdateDeployment(ctx context.Context, deployment *appsv1.Deployment) error {
-	existing := &appsv1.Deployment{}
-	err := r.Get(ctx, client.ObjectKey{Name: deployment.Name, Namespace: deployment.Namespace}, existing)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return r.Create(ctx, deployment)
-		}
-		return err
-	}
-	// Update existing deployment
-	existing.Spec = deployment.Spec
-	return r.Update(ctx, existing)
-}
-
-// createOrUpdateService creates a new Service or updates it if it already exists
-func (r *NewtReconciler) createOrUpdateService(ctx context.Context, service *corev1.Service) error {
-	existing := &corev1.Service{}
-	err := r.Get(ctx, client.ObjectKey{Name: service.Name, Namespace: service.Namespace}, existing)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return r.Create(ctx, service)
-		}
-		return err
-	}
-	// Update existing service (preserve ClusterIP)
-	service.Spec.ClusterIP = existing.Spec.ClusterIP
-	existing.Spec = service.Spec
-	return r.Update(ctx, existing)
+// applyResource applies a Kubernetes object using Server-Side Apply (SSA).
+// SSA is idempotent and handles both create and update atomically.
+// All newt-owned resources use "pangolin-newt" as the field manager.
+func (r *NewtReconciler) applyResource(ctx context.Context, obj client.Object) error {
+	obj.SetManagedFields(nil)
+	return r.Patch(ctx, obj, client.Apply, client.ForceOwnership, client.FieldOwner("pangolin-newt"))
 }
 
 // SetupWithManager registers the controller with the manager to watch Gateway resources.
 // The newt controller watches Gateways and also owns Secrets, Deployments, and Services.
 func (r *NewtReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.Recorder = mgr.GetEventRecorderFor("gateway-newt-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-newt").
-		For(&gatewayv1.Gateway{}).
+		For(&gatewayv1.Gateway{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.Secret{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: r.Config.MaxConcurrentReconciles,
+			RateLimiter:             buildRateLimiter(r.Config),
+		}).
 		Complete(r)
 }
 

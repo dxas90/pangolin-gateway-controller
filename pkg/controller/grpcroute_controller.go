@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -14,10 +15,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -27,6 +31,7 @@ type GRPCRouteReconciler struct {
 	Log            logr.Logger
 	Scheme         *runtime.Scheme
 	PangolinClient pangolin.ClientInterface
+	Config         *config.ControllerConfig
 	Recorder       record.EventRecorder
 }
 
@@ -56,8 +61,9 @@ func (r *GRPCRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Add finalizer if not present
 	if !controllerutil.ContainsFinalizer(route, FinalizerName) {
+		original := route.DeepCopy()
 		controllerutil.AddFinalizer(route, FinalizerName)
-		if err := r.Update(ctx, route); err != nil {
+		if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to add finalizer")
 			return ctrl.Result{}, err
 		}
@@ -91,8 +97,9 @@ func (r *GRPCRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 	}
 
 	// Remove finalizer
+	original := route.DeepCopy()
 	controllerutil.RemoveFinalizer(route, FinalizerName)
-	if err := r.Update(ctx, route); err != nil {
+	if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
 		log.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -148,11 +155,12 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 		resourceID = newResourceID
 
 		// Update route labels with resource ID
+		labelPatch := route.DeepCopy()
 		if route.Labels == nil {
 			route.Labels = make(map[string]string)
 		}
 		route.Labels[ResourceIDLabel] = resourceID
-		if err := r.Update(ctx, route); err != nil {
+		if err := r.Patch(ctx, route, client.MergeFrom(labelPatch)); err != nil {
 			log.Error(err, "Failed to update GRPCRoute with resource ID")
 			return ctrl.Result{}, err
 		}
@@ -369,55 +377,59 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 	return resourceID, nil
 }
 
-// updateRouteStatus updates the GRPCRoute status
+// updateRouteStatus updates the GRPCRoute status with conflict retry.
 func (r *GRPCRouteReconciler) updateRouteStatus(ctx context.Context, route *gatewayv1.GRPCRoute, accepted bool, reason, message string) {
-	condition := metav1.Condition{
-		Type:               string(gatewayv1.RouteConditionAccepted),
-		Status:             metav1.ConditionFalse,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: route.Generation,
-		LastTransitionTime: metav1.Now(),
+	if len(route.Spec.ParentRefs) == 0 {
+		return
 	}
-
-	if accepted {
-		condition.Status = metav1.ConditionTrue
-	}
-
-	// Update parent status
-	parentStatus := gatewayv1.RouteParentStatus{
-		ParentRef:      route.Spec.ParentRefs[0],
-		ControllerName: gatewayv1.GatewayController(ControllerName),
-		Conditions:     []metav1.Condition{condition},
-	}
-
-	// Update or append parent status
-	found := false
-	for i, ps := range route.Status.Parents {
-		if ps.ParentRef.Name == parentStatus.ParentRef.Name {
-			route.Status.Parents[i] = parentStatus
-			found = true
-			break
+	key := client.ObjectKeyFromObject(route)
+	parentRef := route.Spec.ParentRefs[0]
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current := &gatewayv1.GRPCRoute{}
+		if err := r.Get(ctx, key, current); err != nil {
+			return err
 		}
-	}
-
-	if !found {
-		route.Status.Parents = append(route.Status.Parents, parentStatus)
-	}
-
-	if err := r.Status().Update(ctx, route); err != nil {
+		condition := metav1.Condition{
+			Type:               string(gatewayv1.RouteConditionAccepted),
+			Status:             metav1.ConditionFalse,
+			Reason:             reason,
+			Message:            message,
+			ObservedGeneration: current.Generation,
+			LastTransitionTime: metav1.Now(),
+		}
+		if accepted {
+			condition.Status = metav1.ConditionTrue
+		}
+		newParent := gatewayv1.RouteParentStatus{
+			ParentRef:      parentRef,
+			ControllerName: gatewayv1.GatewayController(ControllerName),
+			Conditions:     []metav1.Condition{condition},
+		}
+		found := false
+		for i, ps := range current.Status.Parents {
+			if ps.ParentRef.Name == newParent.ParentRef.Name {
+				current.Status.Parents[i] = newParent
+				found = true
+				break
+			}
+		}
+		if !found {
+			current.Status.Parents = append(current.Status.Parents, newParent)
+		}
+		return r.Status().Update(ctx, current)
+	}); err != nil {
 		r.Log.Error(err, "Failed to update GRPCRoute status")
 	}
 }
 
-// SetupWithManager sets up the controller with the Manager.
-// Enables parallel reconciliation of TCP/UDP services.
+// SetupWithManager sets up the controller with the Manager
 func (r *GRPCRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.Recorder = mgr.GetEventRecorderFor("grpcroute-controller")
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayv1.GRPCRoute{}).
+		Named("grpcroute").
+		For(&gatewayv1.GRPCRoute{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		WithOptions(controller.Options{
-			MaxConcurrentReconciles: 3,
+			MaxConcurrentReconciles: r.Config.MaxConcurrentReconciles,
+			RateLimiter:             buildRateLimiter(r.Config),
 		}).
 		Complete(r)
 }

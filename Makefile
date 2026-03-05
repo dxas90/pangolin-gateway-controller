@@ -1,6 +1,9 @@
 # Image URL to use all building/pushing image targets
 IMG ?= pangolin-gateway-controller:latest
 
+# Pin toolchain to match go.mod (avoids golang.org/x/net Go 1.26 stdlib incompatibility)
+export GOTOOLCHAIN=go1.25.7
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin

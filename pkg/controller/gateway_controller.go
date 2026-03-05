@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
@@ -18,9 +19,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -54,6 +57,7 @@ type GatewayReconciler struct {
 	Scheme          *runtime.Scheme
 	PangolinClient  pangolin.ClientInterface
 	ControllerClass string
+	Config          *config.ControllerConfig
 	Recorder        record.EventRecorder
 }
 
@@ -115,8 +119,9 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Add finalizer if not present
 	if !controllerutil.ContainsFinalizer(gateway, FinalizerName) {
+		original := gateway.DeepCopy()
 		controllerutil.AddFinalizer(gateway, FinalizerName)
-		if err := r.Update(ctx, gateway); err != nil {
+		if err := r.Patch(ctx, gateway, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to add finalizer")
 			metrics.ReconcileTotal.WithLabelValues("gateway", "error").Inc()
 			return ctrl.Result{}, err
@@ -157,17 +162,14 @@ func (r *GatewayReconciler) handleDelete(ctx context.Context, gateway *gatewayv1
 				// Continue anyway, the site might already be deleted
 			} else {
 				log.Info("Deleted site from Pangolin", "siteID", siteID)
-				if r.Recorder != nil {
-					r.Recorder.Event(gateway, corev1.EventTypeNormal, "SiteDeleted",
-						fmt.Sprintf("Deleted Pangolin site %d", siteID))
-				}
 			}
 		}
 	}
 
 	// Remove finalizer
+	original := gateway.DeepCopy()
 	controllerutil.RemoveFinalizer(gateway, FinalizerName)
-	if err := r.Update(ctx, gateway); err != nil {
+	if err := r.Patch(ctx, gateway, client.MergeFrom(original)); err != nil {
 		log.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -198,22 +200,19 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 		}
 
 		// Update Gateway labels with site ID
+		labelPatch := gateway.DeepCopy()
 		if gateway.Labels == nil {
 			gateway.Labels = make(map[string]string)
 		}
 		gateway.Labels[SiteIDLabel] = fmt.Sprintf("%d", site.ID)
-
-		if err := r.Update(ctx, gateway); err != nil {
+		if err := r.Patch(ctx, gateway, client.MergeFrom(labelPatch)); err != nil {
 			log.Error(err, "Failed to update Gateway labels")
 			return ctrl.Result{}, err
 		}
 
 		siteID = fmt.Sprintf("%d", site.ID)
+		r.Recorder.Eventf(gateway, corev1.EventTypeNormal, "SiteCreated", "Pangolin site %s (ID %s) created", fmt.Sprintf("pgc-%s", gateway.Name), siteID)
 		log.Info("Gateway configured with Pangolin site", "siteID", siteID)
-		if r.Recorder != nil {
-			r.Recorder.Event(gateway, corev1.EventTypeNormal, "Programmed",
-				fmt.Sprintf("Gateway programmed with Pangolin site %s", siteID))
-		}
 	} else {
 		// Verify site still exists in Pangolin, recreate if deleted
 		if err := r.verifyOrRecreateSite(ctx, gateway, siteID, log); err != nil {
@@ -286,10 +285,6 @@ func (r *GatewayReconciler) ensureSite(ctx context.Context, gateway *gatewayv1.G
 	createdSite.Secret = site.Secret
 
 	log.Info("Created new Pangolin site", "siteID", createdSite.ID, "siteName", siteName, "newtID", createdSite.NewtID)
-	if r.Recorder != nil {
-		r.Recorder.Event(gateway, corev1.EventTypeNormal, "SiteCreated",
-			fmt.Sprintf("Created Pangolin site %d (%s)", createdSite.ID, siteName))
-	}
 	return createdSite, nil
 }
 
@@ -322,6 +317,7 @@ func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *g
 	}
 
 	// Update Gateway labels with new site ID
+	originalLabels := gateway.DeepCopy()
 	if gateway.Labels == nil {
 		gateway.Labels = make(map[string]string)
 	}
@@ -332,15 +328,11 @@ func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *g
 		return fmt.Errorf("failed to update credentials secret: %w", err)
 	}
 
-	if err := r.Update(ctx, gateway); err != nil {
+	if err := r.Patch(ctx, gateway, client.MergeFrom(originalLabels)); err != nil {
 		return fmt.Errorf("failed to update Gateway with new site ID: %w", err)
 	}
 
 	log.Info("Recreated site after deletion", "oldSiteID", siteID, "newSiteID", newSite.ID)
-	if r.Recorder != nil {
-		r.Recorder.Event(gateway, corev1.EventTypeWarning, "SiteRecreated",
-			fmt.Sprintf("Pangolin site %d was missing, recreated as %d", siteID, newSite.ID))
-	}
 	return nil
 }
 
@@ -387,71 +379,51 @@ func (r *GatewayReconciler) createNewtCredentialsSecret(ctx context.Context, gat
 	return nil
 }
 
-// updateGatewayStatus updates the Gateway status condition with conflict retry
-func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *gatewayv1.Gateway, condType gatewayv1.GatewayConditionType, status bool, reason, message string) {
-	// Use retry.RetryOnConflict to handle resource conflicts
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		// Re-fetch the Gateway to get the latest version
-		key := client.ObjectKeyFromObject(gateway)
-		fresh := &gatewayv1.Gateway{}
-		if err := r.Get(ctx, key, fresh); err != nil {
+// updateGatewayStatus updates the Gateway status condition with conflict retry.
+func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *gatewayv1.Gateway, condType gatewayv1.GatewayConditionType, condStatus bool, reason, message string) {
+	key := client.ObjectKeyFromObject(gateway)
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current := &gatewayv1.Gateway{}
+		if err := r.Get(ctx, key, current); err != nil {
 			return err
 		}
-
 		condition := metav1.Condition{
 			Type:               string(condType),
 			Status:             metav1.ConditionFalse,
 			Reason:             reason,
 			Message:            message,
-			ObservedGeneration: fresh.Generation,
+			ObservedGeneration: current.Generation,
 			LastTransitionTime: metav1.Now(),
 		}
-
-		if status {
+		if condStatus {
 			condition.Status = metav1.ConditionTrue
 		}
-
-		// Update or append condition
 		found := false
-		for i, cond := range fresh.Status.Conditions {
+		for i, cond := range current.Status.Conditions {
 			if cond.Type == condition.Type {
-				// Only update if condition actually changed
-				if cond.Status != condition.Status || cond.Reason != condition.Reason {
-					fresh.Status.Conditions[i] = condition
-				} else {
-					// No change needed
-					return nil
-				}
+				current.Status.Conditions[i] = condition
 				found = true
 				break
 			}
 		}
-
 		if !found {
-			fresh.Status.Conditions = append(fresh.Status.Conditions, condition)
+			current.Status.Conditions = append(current.Status.Conditions, condition)
 		}
-
-		// Use Status().Update() - separate from spec updates
-		return r.Status().Update(ctx, fresh)
-	})
-
-	if err != nil {
-		r.Log.Error(err, "Failed to update Gateway status after retries",
-			"gateway", gateway.Name,
-			"namespace", gateway.Namespace,
-			"conditionType", condType)
+		return r.Status().Update(ctx, current)
+	}); err != nil {
+		r.Log.Error(err, "Failed to update Gateway status")
 	}
 }
 
-// SetupWithManager registers the controller with the manager to watch Gateway resources.
-// Enables parallel reconciliation of multiple Gateways for improved throughput.
+// SetupWithManager registers the controller with the manager to watch Gateway resources
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.Recorder = mgr.GetEventRecorderFor("gateway-site-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-site").
-		For(&gatewayv1.Gateway{}).
+		For(&gatewayv1.Gateway{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Owns(&corev1.Secret{}).
 		WithOptions(controller.Options{
-			MaxConcurrentReconciles: 3, // Parallelize reconciliation across 3 Gateways
+			MaxConcurrentReconciles: r.Config.MaxConcurrentReconciles,
+			RateLimiter:             buildRateLimiter(r.Config),
 		}).
 		Complete(r)
 }

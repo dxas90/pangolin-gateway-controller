@@ -104,10 +104,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO: Add exponential backoff rate limiter
-	// Requires: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request]()
-	// See: https://pkg.go.dev/k8s.io/client-go/util/workqueue
-
 	// Setup Gateway controller
 	if err = (&controller2.GatewayReconciler{
 		Client:          mgr.GetClient(),
@@ -115,6 +111,8 @@ func main() {
 		Scheme:          mgr.GetScheme(),
 		PangolinClient:  pangolinClient,
 		ControllerClass: cfg.Controller.GatewayClassName,
+		Config:          &cfg.Controller,
+		Recorder:        mgr.GetEventRecorderFor("gateway-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create Gateway controller")
 		os.Exit(1)
@@ -126,6 +124,8 @@ func main() {
 		Log:            ctrl.Log.WithName("controllers").WithName("GatewayClass"),
 		Scheme:         mgr.GetScheme(),
 		ControllerName: "pangol.in/gateway-controller",
+		Config:         &cfg.Controller,
+		Recorder:       mgr.GetEventRecorderFor("gatewayclass-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create GatewayClass controller")
 		os.Exit(1)
@@ -137,6 +137,8 @@ func main() {
 		Log:            ctrl.Log.WithName("controllers").WithName("HTTPRoute"),
 		Scheme:         mgr.GetScheme(),
 		PangolinClient: pangolinClient,
+		Config:         &cfg.Controller,
+		Recorder:       mgr.GetEventRecorderFor("httproute-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create HTTPRoute controller")
 		os.Exit(1)
@@ -148,6 +150,8 @@ func main() {
 		Log:            ctrl.Log.WithName("controllers").WithName("GRPCRoute"),
 		Scheme:         mgr.GetScheme(),
 		PangolinClient: pangolinClient,
+		Config:         &cfg.Controller,
+		Recorder:       mgr.GetEventRecorderFor("grpcroute-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create GRPCRoute controller")
 		os.Exit(1)
@@ -162,6 +166,8 @@ func main() {
 		PangolinBaseURL: cfg.Pangolin.BaseURL,
 		NewtEndpoint:    cfg.Controller.NewtEndpoint,
 		NewtImage:       cfg.Controller.NewtImage,
+		Config:          &cfg.Controller,
+		Recorder:        mgr.GetEventRecorderFor("newt-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create Newt controller")
 		os.Exit(1)

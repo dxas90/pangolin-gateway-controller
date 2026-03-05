@@ -14,6 +14,7 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/time v0.12.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -56,7 +57,6 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/term v0.40.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.12.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
@@ -70,3 +70,9 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+// golang.org/x/net v0.47+ introduced config_go126.go that references
+// net/http.HTTP2Config.StrictMaxConcurrentRequests which doesn't exist in the final
+// Go 1.26.0 release. Pin to v0.44.0 which doesn't have this issue.
+// Track: https://github.com/golang/net/issues/xxx
+replace golang.org/x/net => golang.org/x/net v0.44.0

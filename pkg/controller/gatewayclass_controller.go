@@ -3,12 +3,17 @@ package controller
 import (
 	"context"
 
+	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -18,6 +23,8 @@ type GatewayClassReconciler struct {
 	Log            logr.Logger
 	Scheme         *runtime.Scheme
 	ControllerName string
+	Config         *config.ControllerConfig
+	Recorder       record.EventRecorder
 }
 
 // Reconcile handles GatewayClass resources
@@ -77,7 +84,14 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 
 		// Update status
-		if err := r.Status().Update(ctx, &gatewayClass); err != nil {
+		if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			current := &gatewayv1.GatewayClass{}
+			if err := r.Get(ctx, req.NamespacedName, current); err != nil {
+				return err
+			}
+			current.Status.Conditions = gatewayClass.Status.Conditions
+			return r.Status().Update(ctx, current)
+		}); err != nil {
 			log.Error(err, "Failed to update GatewayClass status")
 			return ctrl.Result{}, err
 		}
@@ -91,8 +105,11 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // SetupWithManager sets up the controller with the Manager
 func (r *GatewayClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayv1.GatewayClass{}).
+		For(&gatewayv1.GatewayClass{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("gatewayclass").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: r.Config.MaxConcurrentReconciles,
+			RateLimiter:             buildRateLimiter(r.Config),
+		}).
 		Complete(r)
 }

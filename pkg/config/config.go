@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -73,6 +75,21 @@ type ControllerConfig struct {
 
 	// NewtEndpoint is the Pangolin endpoint for newt VPN authentication
 	NewtEndpoint string `yaml:"newtEndpoint"`
+
+	// MaxConcurrentReconciles is the maximum number of concurrent reconciliations per controller
+	MaxConcurrentReconciles int `yaml:"maxConcurrentReconciles"`
+
+	// RateLimiterBaseDelay is the minimum base delay for the exponential rate limiter
+	RateLimiterBaseDelay time.Duration `yaml:"rateLimiterBaseDelay"`
+
+	// RateLimiterMaxDelay is the maximum delay for the exponential rate limiter
+	RateLimiterMaxDelay time.Duration `yaml:"rateLimiterMaxDelay"`
+
+	// WorkqueueQPS is the token bucket QPS for the workqueue bucket rate limiter
+	WorkqueueQPS float64 `yaml:"workqueueQPS"`
+
+	// WorkqueueBurst is the burst size for the workqueue bucket rate limiter
+	WorkqueueBurst int `yaml:"workqueueBurst"`
 }
 
 // LoggingConfig contains logging settings
@@ -145,6 +162,26 @@ func (c *Config) ApplyDefaults() {
 		c.Controller.NewtImage = "docker.io/fosrl/newt:1.10.0"
 	}
 
+	if c.Controller.MaxConcurrentReconciles <= 0 {
+		c.Controller.MaxConcurrentReconciles = 1
+	}
+
+	if c.Controller.RateLimiterBaseDelay <= 0 {
+		c.Controller.RateLimiterBaseDelay = 5 * time.Millisecond
+	}
+
+	if c.Controller.RateLimiterMaxDelay <= 0 {
+		c.Controller.RateLimiterMaxDelay = 1000 * time.Second
+	}
+
+	if c.Controller.WorkqueueQPS <= 0 {
+		c.Controller.WorkqueueQPS = 10.0
+	}
+
+	if c.Controller.WorkqueueBurst <= 0 {
+		c.Controller.WorkqueueBurst = 100
+	}
+
 	if c.Controller.NewtEndpoint == "" {
 		// Derive newt endpoint from Pangolin API URL
 		// If API is api.example.com, newt connects to example.com
@@ -197,23 +234,55 @@ func (c *Config) Validate() error {
 
 // LoadFromEnv loads configuration from environment variables
 func LoadFromEnv() (*Config, error) {
+	controllerCfg := ControllerConfig{
+		GatewayClassName:        os.Getenv("GATEWAY_CLASS_NAME"),
+		Namespace:               os.Getenv("WATCH_NAMESPACE"),
+		MetricsBindAddress:      os.Getenv("METRICS_BIND_ADDRESS"),
+		HealthProbeBindAddress:  os.Getenv("HEALTH_PROBE_BIND_ADDRESS"),
+		LeaderElection:          os.Getenv("ENABLE_LEADER_ELECTION") == "true",
+		LeaderElectionID:        os.Getenv("LEADER_ELECTION_ID"),
+		LeaderElectionNamespace: os.Getenv("LEADER_ELECTION_NAMESPACE"),
+		NewtImage:               os.Getenv("NEWT_IMAGE"),
+		NewtEndpoint:            os.Getenv("NEWT_ENDPOINT"),
+	}
+
+	if v := os.Getenv("MAX_CONCURRENT_RECONCILES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			controllerCfg.MaxConcurrentReconciles = n
+		}
+	}
+
+	if v := os.Getenv("RATE_LIMITER_BASE_DELAY"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			controllerCfg.RateLimiterBaseDelay = d
+		}
+	}
+
+	if v := os.Getenv("RATE_LIMITER_MAX_DELAY"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			controllerCfg.RateLimiterMaxDelay = d
+		}
+	}
+
+	if v := os.Getenv("WORKQUEUE_QPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			controllerCfg.WorkqueueQPS = f
+		}
+	}
+
+	if v := os.Getenv("WORKQUEUE_BURST"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			controllerCfg.WorkqueueBurst = n
+		}
+	}
+
 	config := &Config{
 		Pangolin: PangolinConfig{
 			APIKey:  os.Getenv("PANGOLIN_API_KEY"),
 			OrgID:   os.Getenv("PANGOLIN_ORG_ID"),
 			BaseURL: os.Getenv("PANGOLIN_BASE_URL"),
 		},
-		Controller: ControllerConfig{
-			GatewayClassName:        os.Getenv("GATEWAY_CLASS_NAME"),
-			Namespace:               os.Getenv("WATCH_NAMESPACE"),
-			MetricsBindAddress:      os.Getenv("METRICS_BIND_ADDRESS"),
-			HealthProbeBindAddress:  os.Getenv("HEALTH_PROBE_BIND_ADDRESS"),
-			LeaderElection:          os.Getenv("ENABLE_LEADER_ELECTION") == "true",
-			LeaderElectionID:        os.Getenv("LEADER_ELECTION_ID"),
-			LeaderElectionNamespace: os.Getenv("LEADER_ELECTION_NAMESPACE"),
-			NewtImage:               os.Getenv("NEWT_IMAGE"),
-			NewtEndpoint:            os.Getenv("NEWT_ENDPOINT"),
-		},
+		Controller: controllerCfg,
 		Kubernetes: KubernetesConfig{
 			Kubeconfig: os.Getenv("KUBECONFIG"),
 			Context:    os.Getenv("KUBE_CONTEXT"),
