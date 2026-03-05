@@ -193,10 +193,16 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 
-		// Create Secret with newt credentials
-		if err := r.createNewtCredentialsSecret(ctx, gateway, site); err != nil {
-			log.Error(err, "Failed to create newt credentials secret")
-			return ctrl.Result{}, err
+		// Create Secret with newt credentials (only if we have credentials;
+		// when an existing site was found via ListSites the API doesn't return
+		// credentials, so preserve whatever is already in the Secret).
+		if site.NewtID != "" {
+			if err := r.createNewtCredentialsSecret(ctx, gateway, site); err != nil {
+				log.Error(err, "Failed to create newt credentials secret")
+				return ctrl.Result{}, err
+			}
+		} else {
+			log.Info("Site already existed in Pangolin; preserving existing newt credentials secret")
 		}
 
 		// Update Gateway labels with site ID
@@ -367,8 +373,14 @@ func (r *GatewayReconciler) createNewtCredentialsSecret(ctx context.Context, gat
 
 	if err := r.Create(ctx, secret); err != nil {
 		if errors.IsAlreadyExists(err) {
-			// Secret already exists, update it
-			return r.Update(ctx, secret)
+			// Secret already exists — patch only the data fields so we don't
+			// clobber metadata (owner refs, resource version, etc.).
+			existing := &corev1.Secret{}
+			if getErr := r.Get(ctx, client.ObjectKey{Namespace: secret.Namespace, Name: secret.Name}, existing); getErr != nil {
+				return fmt.Errorf("failed to get existing secret: %w", getErr)
+			}
+			existing.StringData = secret.StringData
+			return r.Update(ctx, existing)
 		}
 		return fmt.Errorf("failed to create secret: %w", err)
 	}
