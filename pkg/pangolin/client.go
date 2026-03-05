@@ -33,6 +33,9 @@ type Client struct {
 	APIKey     string
 	OrgID      string
 	HTTPClient *http.Client
+	// Breaker prevents cascading failures when the API is degraded.
+	// Opens after 5 consecutive retryable failures, resets after 30 s.
+	Breaker *CircuitBreaker
 }
 
 // NewClient creates a new Pangolin API client with the given credentials.
@@ -50,6 +53,7 @@ func NewClient(apiKey, orgID string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: DefaultTimeout,
 		},
+		Breaker: NewCircuitBreaker(5, 30*time.Second),
 	}
 }
 
@@ -139,8 +143,16 @@ type SiteDefaults struct {
 	ListenPort    int    `json:"listenPort"`
 }
 
-// doRequest performs an HTTP request with authentication
+// doRequest performs an HTTP request with authentication.
+// It checks the circuit breaker before executing and records success/failure afterwards.
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+	// Fast-fail if the circuit breaker is open
+	if c.Breaker != nil {
+		if err := c.Breaker.Allow(); err != nil {
+			return nil, err
+		}
+	}
+
 	startTime := time.Now()
 
 	var reqBody io.Reader
@@ -164,6 +176,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		// Connection-level errors: API may be down — count as circuit breaker failure
+		if c.Breaker != nil {
+			c.Breaker.RecordFailure()
+		}
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -182,14 +198,28 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	if resp.StatusCode >= 400 {
 		metrics.PangolinAPIErrors.WithLabelValues(path, method, statusCode).Inc()
-		return nil, &PangolinAPIError{
+		apiErr := &PangolinAPIError{
 			StatusCode: resp.StatusCode,
 			Endpoint:   path,
 			Method:     method,
 			Message:    string(respBody),
 		}
+		if c.Breaker != nil {
+			if apiErr.IsRetryable() {
+				// 5xx/429: API degraded — open the circuit
+				c.Breaker.RecordFailure()
+			} else {
+				// 4xx: API is responsive, application-level error — don't penalise
+				c.Breaker.RecordSuccess()
+			}
+		}
+		return nil, apiErr
 	}
 
+	// Successful response — API is healthy
+	if c.Breaker != nil {
+		c.Breaker.RecordSuccess()
+	}
 	return respBody, nil
 }
 

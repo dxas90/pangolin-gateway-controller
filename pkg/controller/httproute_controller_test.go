@@ -480,6 +480,90 @@ func (s *HTTPRouteControllerTestSuite) TestReconcile_SharedResource() {
 	}, "Both HTTPRoutes should be accepted and share the resource")
 }
 
+// TestReconcile_MultipleBackends verifies that all BackendRefs in a rule create separate targets.
+func (s *HTTPRouteControllerTestSuite) TestReconcile_MultipleBackends() {
+	// Create Gateway
+	gateway := testutil.NewTestGateway(testutil.TestGatewayName, s.testNamespace)
+	gateway.Labels = map[string]string{
+		controller.SiteIDLabel: testutil.TestSiteID,
+	}
+	err := s.Client().Create(s.Context(), gateway)
+	s.Require().NoError(err)
+
+	// Create two backend Services with distinct IPs (envtest assigns ClusterIPs)
+	svcA := testutil.NewTestService("service-a", s.testNamespace)
+	svcA.Spec.Ports[0].Port = 80
+	err = s.Client().Create(s.Context(), svcA)
+	s.Require().NoError(err)
+	err = s.Client().Get(s.Context(), client.ObjectKeyFromObject(svcA), svcA)
+	s.Require().NoError(err)
+
+	svcB := testutil.NewTestService("service-b", s.testNamespace)
+	svcB.Spec.Ports[0].Port = 9090
+	err = s.Client().Create(s.Context(), svcB)
+	s.Require().NoError(err)
+	err = s.Client().Get(s.Context(), client.ObjectKeyFromObject(svcB), svcB)
+	s.Require().NoError(err)
+
+	// Build HTTPRoute with 1 rule, 2 backends
+	httpRoute := testutil.NewTestHTTPRoute("multi-backend-route", s.testNamespace, testutil.TestGatewayName, testutil.TestHostname)
+	port80 := gatewayv1.PortNumber(80)
+	port9090 := gatewayv1.PortNumber(9090)
+	httpRoute.Spec.Rules = []gatewayv1.HTTPRouteRule{
+		{
+			BackendRefs: []gatewayv1.HTTPBackendRef{
+				{
+					BackendRef: gatewayv1.BackendRef{
+						BackendObjectReference: gatewayv1.BackendObjectReference{
+							Name: "service-a",
+							Port: &port80,
+						},
+					},
+				},
+				{
+					BackendRef: gatewayv1.BackendRef{
+						BackendObjectReference: gatewayv1.BackendObjectReference{
+							Name: "service-b",
+							Port: &port9090,
+						},
+					},
+				},
+			},
+		},
+	}
+	err = s.Client().Create(s.Context(), httpRoute)
+	s.Require().NoError(err)
+
+	// Mock Pangolin API
+	domains := []map[string]interface{}{{"baseDomain": "example.com", "domainId": "domain1"}}
+	resource := map[string]interface{}{"resourceId": "resource-multi", "name": testutil.TestHostname}
+	targetA := map[string]interface{}{"targetId": float64(100), "ip": svcA.Spec.ClusterIP, "port": float64(80), "path": "/"}
+	targetB := map[string]interface{}{"targetId": float64(101), "ip": svcB.Spec.ClusterIP, "port": float64(9090), "path": "/"}
+
+	s.mockPangolin.On("ListDomains", testutil.MockAnything).Return(domains, nil).Maybe()
+	s.mockPangolin.On("ListResources", testutil.MockAnything).Return([]map[string]interface{}{}, nil).Once()
+	s.mockPangolin.On("CreateResource", testutil.MockAnything, testutil.MockAnything).Return(resource, nil).Once()
+	s.mockPangolin.On("UpdateResource", testutil.MockAnything, "resource-multi", testutil.MockAnything).Return(nil).Maybe()
+	s.mockPangolin.On("DisableSSO", testutil.MockAnything, "resource-multi").Return(nil).Maybe()
+	s.mockPangolin.On("ListTargetsRaw", testutil.MockAnything, "resource-multi").Return([]map[string]interface{}{}, nil).Once()
+	// Expect two CreateTargetRaw calls — one per backend
+	s.mockPangolin.On("CreateTargetRaw", testutil.MockAnything, "resource-multi", testutil.MockAnything).Return(targetA, nil).Once()
+	s.mockPangolin.On("CreateTargetRaw", testutil.MockAnything, "resource-multi", testutil.MockAnything).Return(targetB, nil).Once()
+
+	// Reconcile
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "multi-backend-route",
+			Namespace: s.testNamespace,
+		},
+	}
+	result, err := s.reconciler.Reconcile(s.Context(), req)
+	s.Require().NoError(err)
+	s.Require().Equal(5*time.Minute, result.RequeueAfter, "Should requeue after 5 minutes")
+
+	// Both target calls must have been made (verified in TearDownTest via AssertExpectations)
+}
+
 // TestSuite runs the HTTPRoute controller test suite.
 func TestHTTPRouteControllerSuite(t *testing.T) {
 	suite.Run(t, new(HTTPRouteControllerTestSuite))

@@ -150,6 +150,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 		if err != nil {
 			log.Error(err, "Failed to create Pangolin resource")
 			r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
+			r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource: %s", err.Error())
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 		resourceID = newResourceID
@@ -165,6 +166,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 			return ctrl.Result{}, err
 		}
 		log.Info("Created Pangolin resource", "resourceID", resourceID)
+		r.Recorder.Eventf(route, corev1.EventTypeNormal, "ResourceCreated", "Created Pangolin resource %s", resourceID)
 	} else {
 		// Verify resource still exists in Pangolin, recreate if deleted
 		if err := r.verifyOrRecreateResource(ctx, route, gateway, resourceID, log); err != nil {
@@ -178,11 +180,13 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 	if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
 		log.Error(err, "Failed to reconcile targets")
 		r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
+		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", err.Error())
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
 	// Update GRPCRoute status
 	r.updateRouteStatus(ctx, route, true, "Accepted", "GRPCRoute is configured in Pangolin")
+	r.Recorder.Eventf(route, corev1.EventTypeNormal, "Accepted", "GRPCRoute configured in Pangolin")
 
 	log.Info("Successfully reconciled GRPCRoute", "resourceID", resourceID)
 	// Requeue after 5 minutes to periodically verify resource still exists
@@ -318,6 +322,8 @@ func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 		targetID := fmt.Sprintf("%v", createdTarget["targetId"])
 		log.Info("Created target", "targetID", targetID, "ip", clusterIP, "port", port, "service", serviceName)
+		r.Recorder.Eventf(route, corev1.EventTypeNormal, "TargetCreated",
+			"Created target %s (%s:%d)", targetID, clusterIP, port)
 	}
 
 	return nil

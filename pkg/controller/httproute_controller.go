@@ -246,10 +246,12 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 			if err != nil {
 				log.Error(err, "Failed to create Pangolin resource", "hostname", hostname)
 				r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
+				r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource for hostname %s: %s", hostname, err.Error())
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
 			resourceID = newResourceID
 			log.Info("Created Pangolin resource", "resourceID", resourceID, "hostname", hostname, "resourceName", resourceName)
+			r.Recorder.Eventf(route, corev1.EventTypeNormal, "ResourceCreated", "Created Pangolin resource %s for hostname %s", resourceID, hostname)
 		} else {
 			log.V(1).Info("Using existing Pangolin resource", "resourceID", resourceID, "hostname", hostname, "subdomain", subdomain)
 		}
@@ -258,6 +260,7 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 		if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
 			log.Error(err, "Failed to reconcile targets", "resourceID", resourceID, "hostname", hostname)
 			r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
+			r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets for hostname %s: %s", hostname, err.Error())
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 		processedHostnames++
@@ -271,6 +274,7 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 
 	// Update HTTPRoute status
 	r.updateRouteStatus(ctx, route, true, "Accepted", "HTTPRoute is configured in Pangolin")
+	r.Recorder.Eventf(route, corev1.EventTypeNormal, "Accepted", "HTTPRoute configured in Pangolin (%d hostname(s))", processedHostnames)
 
 	log.Info("Successfully reconciled HTTPRoute", "processedHostnames", processedHostnames, "totalHostnames", len(route.Spec.Hostnames))
 	// Requeue after 5 minutes to periodically verify resource still exists
@@ -316,31 +320,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 			continue
 		}
 
-		// Use first backend for now (TODO: handle multiple backends with weights)
-		backendRef := rule.BackendRefs[0]
-		serviceName := string(backendRef.Name)
-		serviceNamespace := route.Namespace
-		if backendRef.Namespace != nil {
-			serviceNamespace = string(*backendRef.Namespace)
-		}
-
-		// Get the Service to find its ClusterIP
-		svc := &corev1.Service{}
-		if err := r.Get(ctx, types.NamespacedName{
-			Name:      serviceName,
-			Namespace: serviceNamespace,
-		}, svc); err != nil {
-			return fmt.Errorf("failed to get service %s: %w", serviceName, err)
-		}
-
-		clusterIP := svc.Spec.ClusterIP
-		if clusterIP == "" || clusterIP == "None" {
-			return fmt.Errorf("service %s has no ClusterIP", serviceName)
-		}
-
-		port := int(*backendRef.Port)
-
-		// Extract path and matching from rule
+		// Extract path and matching from rule (shared across all backends in the rule)
 		path := "/"
 		pathMatchType := "prefix"
 		if len(rule.Matches) > 0 && rule.Matches[0].Path != nil {
@@ -357,101 +337,135 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 			}
 		}
 
-		// Calculate priority from weight (or use rule order if no weight)
-		priority := (ruleIdx + 1) * 10 // Default: 10, 20, 30...
-		if backendRef.Weight != nil {
-			priority = int(*backendRef.Weight)
-		}
-
-		// Check if target already exists with same ip:port:siteId:path
-		// Also check for drift in configuration (pathMatchType, priority, method)
-		targetExists := false
-		needsUpdate := false
-		var existingTargetID string
-
-		for _, target := range existingTargets {
-			if fmt.Sprintf("%v", target["ip"]) == clusterIP &&
-				fmt.Sprintf("%v", target["port"]) == fmt.Sprintf("%d", port) &&
-				fmt.Sprintf("%v", target["siteId"]) == fmt.Sprintf("%d", siteIDInt) &&
-				fmt.Sprintf("%v", target["path"]) == path {
-				targetExists = true
-				existingTargetID = fmt.Sprintf("%v", target["targetId"])
-
-				// Mark this target as matched (still needed)
-				matchedTargetIDs[existingTargetID] = true
-
-				// Check for configuration drift
-				if fmt.Sprintf("%v", target["pathMatchType"]) != pathMatchType {
-					needsUpdate = true
-					log.Info("Target drift detected: pathMatchType changed", "targetId", existingTargetID, "old", target["pathMatchType"], "new", pathMatchType)
-				}
-				if fmt.Sprintf("%v", target["priority"]) != fmt.Sprintf("%d", priority) {
-					needsUpdate = true
-					log.Info("Target drift detected: priority changed", "targetId", existingTargetID, "old", target["priority"], "new", priority)
-				}
-				if fmt.Sprintf("%v", target["method"]) != "http" {
-					needsUpdate = true
-					log.Info("Target drift detected: method changed", "targetId", existingTargetID, "old", target["method"], "new", "http")
-				}
-
-				if !needsUpdate {
-					log.V(1).Info("Target already exists with correct configuration, skipping", "ip", clusterIP, "port", port, "path", path, "targetId", existingTargetID)
-				}
-				break
-			}
-		}
-
-		if targetExists && !needsUpdate {
-			continue
-		}
-
-		// If target exists but has drifted, delete it first
-		if targetExists && needsUpdate {
-			// Check for context cancellation before delete operation
+		// Create one Pangolin target per backend (supports weighted traffic splitting)
+		for backendIdx, backendRef := range rule.BackendRefs {
+			// Check for context cancellation in backend loop
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
 
-			log.V(1).Info("Deleting drifted target", "targetId", existingTargetID)
-			if err := r.PangolinClient.DeleteTarget(ctx, existingTargetID); err != nil {
-				log.Error(err, "Failed to delete drifted target", "targetId", existingTargetID)
-				// Continue to try recreating anyway
+			serviceName := string(backendRef.Name)
+			serviceNamespace := route.Namespace
+			if backendRef.Namespace != nil {
+				serviceNamespace = string(*backendRef.Namespace)
 			}
+
+			// Get the Service to find its ClusterIP
+			svc := &corev1.Service{}
+			if err := r.Get(ctx, types.NamespacedName{
+				Name:      serviceName,
+				Namespace: serviceNamespace,
+			}, svc); err != nil {
+				return fmt.Errorf("failed to get service %s: %w", serviceName, err)
+			}
+
+			clusterIP := svc.Spec.ClusterIP
+			if clusterIP == "" || clusterIP == "None" {
+				return fmt.Errorf("service %s has no ClusterIP", serviceName)
+			}
+
+			port := int(*backendRef.Port)
+
+			// Priority: weight overrides rule+backend order
+			// Example: rule 0, backend 0 → 110; rule 0, backend 1 → 120; rule 1 → 210...
+			priority := (ruleIdx+1)*100 + (backendIdx+1)*10
+			if backendRef.Weight != nil {
+				priority = int(*backendRef.Weight)
+			}
+
+			// Check if target already exists with same ip:port:siteId:path
+			// Also check for drift in configuration (pathMatchType, priority, method)
+			targetExists := false
+			needsUpdate := false
+			var existingTargetID string
+
+			for _, target := range existingTargets {
+				if fmt.Sprintf("%v", target["ip"]) == clusterIP &&
+					fmt.Sprintf("%v", target["port"]) == fmt.Sprintf("%d", port) &&
+					fmt.Sprintf("%v", target["siteId"]) == fmt.Sprintf("%d", siteIDInt) &&
+					fmt.Sprintf("%v", target["path"]) == path {
+					targetExists = true
+					existingTargetID = fmt.Sprintf("%v", target["targetId"])
+
+					// Mark this target as matched (still needed)
+					matchedTargetIDs[existingTargetID] = true
+
+					// Check for configuration drift
+					if fmt.Sprintf("%v", target["pathMatchType"]) != pathMatchType {
+						needsUpdate = true
+						log.Info("Target drift detected: pathMatchType changed", "targetId", existingTargetID, "old", target["pathMatchType"], "new", pathMatchType)
+					}
+					if fmt.Sprintf("%v", target["priority"]) != fmt.Sprintf("%d", priority) {
+						needsUpdate = true
+						log.Info("Target drift detected: priority changed", "targetId", existingTargetID, "old", target["priority"], "new", priority)
+					}
+					if fmt.Sprintf("%v", target["method"]) != "http" {
+						needsUpdate = true
+						log.Info("Target drift detected: method changed", "targetId", existingTargetID, "old", target["method"], "new", "http")
+					}
+
+					if !needsUpdate {
+						log.V(1).Info("Target already exists with correct configuration, skipping", "ip", clusterIP, "port", port, "path", path, "targetId", existingTargetID)
+					}
+					break
+				}
+			}
+
+			if targetExists && !needsUpdate {
+				continue
+			}
+
+			// If target exists but has drifted, delete it first
+			if targetExists && needsUpdate {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
+				log.V(1).Info("Deleting drifted target", "targetId", existingTargetID)
+				if err := r.PangolinClient.DeleteTarget(ctx, existingTargetID); err != nil {
+					log.Error(err, "Failed to delete drifted target", "targetId", existingTargetID)
+					// Continue to try recreating anyway
+				}
+			}
+
+			// Check for context cancellation before create operation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			// Create target via Integration API: PUT /resource/{resourceId}/target
+			targetData := map[string]interface{}{
+				"siteId":        siteIDInt,
+				"ip":            clusterIP,
+				"port":          port,
+				"method":        "http",
+				"enabled":       true,
+				"path":          path,
+				"pathMatchType": pathMatchType,
+				"priority":      priority,
+			}
+
+			createdTarget, err := r.PangolinClient.CreateTargetRaw(ctx, resourceID, targetData)
+			if err != nil {
+				return fmt.Errorf("failed to create target for rule %d backend %d: %w", ruleIdx, backendIdx, err)
+			}
+
+			targetID := fmt.Sprintf("%v", createdTarget["targetId"])
+			log.Info("Created target", "targetID", targetID, "ip", clusterIP, "port", port, "path", path,
+				"pathMatchType", pathMatchType, "priority", priority, "service", serviceName,
+				"backend", fmt.Sprintf("%d/%d", backendIdx+1, len(rule.BackendRefs)))
+			r.Recorder.Eventf(route, corev1.EventTypeNormal, "TargetCreated",
+				"Created target %s (rule %d, backend %s:%d, path=%s)", targetID, ruleIdx, clusterIP, port, path)
+
+			// Mark newly created target as matched
+			matchedTargetIDs[targetID] = true
 		}
-
-		// Check for context cancellation before create operation
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// Create target via Integration API: PUT /resource/{resourceId}/target
-		// Include routing rules (path matching, priority, health checks)
-		// Note: labels field not supported by Integration API, only used internally by Pangolin UI
-		targetData := map[string]interface{}{
-			"siteId":        siteIDInt,
-			"ip":            clusterIP,
-			"port":          port,
-			"method":        "http",
-			"enabled":       true,
-			"path":          path,
-			"pathMatchType": pathMatchType,
-			"priority":      priority,
-		}
-
-		createdTarget, err := r.PangolinClient.CreateTargetRaw(ctx, resourceID, targetData)
-		if err != nil {
-			return fmt.Errorf("failed to create target for rule %d: %w", ruleIdx, err)
-		}
-
-		targetID := fmt.Sprintf("%v", createdTarget["targetId"])
-		log.Info("Created target with routing rules", "targetID", targetID, "ip", clusterIP, "port", port, "path", path, "pathMatchType", pathMatchType, "priority", priority, "service", serviceName)
-
-		// Mark newly created target as matched
-		matchedTargetIDs[targetID] = true
 	}
 
 	// Build a set of paths from the current HTTPRoute's rules
