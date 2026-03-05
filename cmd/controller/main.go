@@ -98,6 +98,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup field indexes for efficient querying (O(1) lookups instead of O(n) scans)
+	if err := controller2.SetupIndexes(mgr); err != nil {
+		setupLog.Error(err, "Failed to setup field indexes")
+		os.Exit(1)
+	}
+
 	// TODO: Add exponential backoff rate limiter
 	// Requires: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request]()
 	// See: https://pkg.go.dev/k8s.io/client-go/util/workqueue

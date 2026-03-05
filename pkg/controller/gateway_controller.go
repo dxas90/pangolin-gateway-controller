@@ -15,8 +15,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -49,8 +52,9 @@ type GatewayReconciler struct {
 	client.Client
 	Log             logr.Logger
 	Scheme          *runtime.Scheme
-	PangolinClient  *pangolin.Client
+	PangolinClient  pangolin.ClientInterface
 	ControllerClass string
+	Recorder        record.EventRecorder
 }
 
 // Reconcile implements the main reconciliation loop for Gateway resources.
@@ -153,6 +157,10 @@ func (r *GatewayReconciler) handleDelete(ctx context.Context, gateway *gatewayv1
 				// Continue anyway, the site might already be deleted
 			} else {
 				log.Info("Deleted site from Pangolin", "siteID", siteID)
+				if r.Recorder != nil {
+					r.Recorder.Event(gateway, corev1.EventTypeNormal, "SiteDeleted",
+						fmt.Sprintf("Deleted Pangolin site %d", siteID))
+				}
 			}
 		}
 	}
@@ -202,6 +210,10 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 
 		siteID = fmt.Sprintf("%d", site.ID)
 		log.Info("Gateway configured with Pangolin site", "siteID", siteID)
+		if r.Recorder != nil {
+			r.Recorder.Event(gateway, corev1.EventTypeNormal, "Programmed",
+				fmt.Sprintf("Gateway programmed with Pangolin site %s", siteID))
+		}
 	} else {
 		// Verify site still exists in Pangolin, recreate if deleted
 		if err := r.verifyOrRecreateSite(ctx, gateway, siteID, log); err != nil {
@@ -274,6 +286,10 @@ func (r *GatewayReconciler) ensureSite(ctx context.Context, gateway *gatewayv1.G
 	createdSite.Secret = site.Secret
 
 	log.Info("Created new Pangolin site", "siteID", createdSite.ID, "siteName", siteName, "newtID", createdSite.NewtID)
+	if r.Recorder != nil {
+		r.Recorder.Event(gateway, corev1.EventTypeNormal, "SiteCreated",
+			fmt.Sprintf("Created Pangolin site %d (%s)", createdSite.ID, siteName))
+	}
 	return createdSite, nil
 }
 
@@ -321,6 +337,10 @@ func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *g
 	}
 
 	log.Info("Recreated site after deletion", "oldSiteID", siteID, "newSiteID", newSite.ID)
+	if r.Recorder != nil {
+		r.Recorder.Event(gateway, corev1.EventTypeWarning, "SiteRecreated",
+			fmt.Sprintf("Pangolin site %d was missing, recreated as %d", siteID, newSite.ID))
+	}
 	return nil
 }
 
@@ -367,44 +387,71 @@ func (r *GatewayReconciler) createNewtCredentialsSecret(ctx context.Context, gat
 	return nil
 }
 
-// updateGatewayStatus updates the Gateway status condition
+// updateGatewayStatus updates the Gateway status condition with conflict retry
 func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *gatewayv1.Gateway, condType gatewayv1.GatewayConditionType, status bool, reason, message string) {
-	condition := metav1.Condition{
-		Type:               string(condType),
-		Status:             metav1.ConditionFalse,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: gateway.Generation,
-		LastTransitionTime: metav1.Now(),
-	}
-
-	if status {
-		condition.Status = metav1.ConditionTrue
-	}
-
-	// Update or append condition
-	found := false
-	for i, cond := range gateway.Status.Conditions {
-		if cond.Type == condition.Type {
-			gateway.Status.Conditions[i] = condition
-			found = true
-			break
+	// Use retry.RetryOnConflict to handle resource conflicts
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Re-fetch the Gateway to get the latest version
+		key := client.ObjectKeyFromObject(gateway)
+		fresh := &gatewayv1.Gateway{}
+		if err := r.Get(ctx, key, fresh); err != nil {
+			return err
 		}
-	}
 
-	if !found {
-		gateway.Status.Conditions = append(gateway.Status.Conditions, condition)
-	}
+		condition := metav1.Condition{
+			Type:               string(condType),
+			Status:             metav1.ConditionFalse,
+			Reason:             reason,
+			Message:            message,
+			ObservedGeneration: fresh.Generation,
+			LastTransitionTime: metav1.Now(),
+		}
 
-	if err := r.Status().Update(ctx, gateway); err != nil {
-		r.Log.Error(err, "Failed to update Gateway status")
+		if status {
+			condition.Status = metav1.ConditionTrue
+		}
+
+		// Update or append condition
+		found := false
+		for i, cond := range fresh.Status.Conditions {
+			if cond.Type == condition.Type {
+				// Only update if condition actually changed
+				if cond.Status != condition.Status || cond.Reason != condition.Reason {
+					fresh.Status.Conditions[i] = condition
+				} else {
+					// No change needed
+					return nil
+				}
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			fresh.Status.Conditions = append(fresh.Status.Conditions, condition)
+		}
+
+		// Use Status().Update() - separate from spec updates
+		return r.Status().Update(ctx, fresh)
+	})
+
+	if err != nil {
+		r.Log.Error(err, "Failed to update Gateway status after retries",
+			"gateway", gateway.Name,
+			"namespace", gateway.Namespace,
+			"conditionType", condType)
 	}
 }
 
-// SetupWithManager registers the controller with the manager to watch Gateway resources
+// SetupWithManager registers the controller with the manager to watch Gateway resources.
+// Enables parallel reconciliation of multiple Gateways for improved throughput.
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("gateway-site-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-site").
 		For(&gatewayv1.Gateway{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 3, // Parallelize reconciliation across 3 Gateways
+		}).
 		Complete(r)
 }

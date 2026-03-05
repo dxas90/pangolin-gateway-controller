@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -52,6 +53,7 @@ type NewtReconciler struct {
 	PangolinBaseURL string
 	NewtEndpoint    string
 	NewtImage       string
+	Recorder        record.EventRecorder
 }
 
 // Reconcile ensures a newt VPN deployment exists for Gateways with Pangolin sites.
@@ -431,6 +433,7 @@ func (r *NewtReconciler) createOrUpdateService(ctx context.Context, service *cor
 // SetupWithManager registers the controller with the manager to watch Gateway resources.
 // The newt controller watches Gateways and also owns Secrets, Deployments, and Services.
 func (r *NewtReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("gateway-newt-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-newt").
 		For(&gatewayv1.Gateway{}).

@@ -13,8 +13,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -24,7 +26,8 @@ type GRPCRouteReconciler struct {
 	client.Client
 	Log            logr.Logger
 	Scheme         *runtime.Scheme
-	PangolinClient *pangolin.Client
+	PangolinClient pangolin.ClientInterface
+	Recorder       record.EventRecorder
 }
 
 // Reconcile implements the reconciliation logic for GRPCRoute resources
@@ -407,9 +410,14 @@ func (r *GRPCRouteReconciler) updateRouteStatus(ctx context.Context, route *gate
 	}
 }
 
-// SetupWithManager sets up the controller with the Manager
+// SetupWithManager sets up the controller with the Manager.
+// Enables parallel reconciliation of TCP/UDP services.
 func (r *GRPCRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("grpcroute-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gatewayv1.GRPCRoute{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 3,
+		}).
 		Complete(r)
 }

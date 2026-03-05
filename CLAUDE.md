@@ -23,12 +23,33 @@ make build              # Outputs to bin/controller
 # Run tests
 make test               # Runs all unit tests with coverage
 go test ./pkg/...       # Run specific package tests
+go test ./pkg/controller -run TestGatewayControllerSuite -v  # Run specific suite
 
 # Lint and format
 make fmt                # Format code
 make vet                # Run go vet
 make lint               # Run golangci-lint
 ```
+
+### Testing
+
+```bash
+# Run all tests with envtest
+make test
+
+# Run specific test suite
+go test ./pkg/controller -run TestGatewayControllerSuite -v
+
+# Run with coverage report
+go test ./... -coverprofile=coverage.out
+go tool cover -html=coverage.out
+
+# Install envtest binaries (one-time setup)
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+setup-envtest use 1.28.x!
+```
+
+**See `TESTING.md` for comprehensive testing guide.**
 
 ### Docker & Deployment
 
@@ -287,6 +308,7 @@ kubectl set env deployment/pangolin-gateway-controller LOG_LEVEL=debug -n pangol
 ├── pkg/
 │   ├── config/             # Configuration loading and validation
 │   ├── controller/         # Reconcilers (gateway, newt, httproute, grpcroute)
+│   ├── metrics/            # Prometheus metrics definitions
 │   └── pangolin/           # Pangolin API client
 ├── config/                 # Kubernetes manifests (RBAC, deployment)
 ├── examples/               # Example Gateway/HTTPRoute resources
@@ -296,6 +318,12 @@ kubectl set env deployment/pangolin-gateway-controller LOG_LEVEL=debug -n pangol
 └── docs/                  # Documentation
 ```
 
+## Additional Documentation
+
+- **IMPROVEMENTS.md** - Detailed roadmap of implemented and pending improvements
+- **RUNBOOK.md** - Operational procedures for finalizers, troubleshooting, and emergencies
+- **OPERATOR-PATTERNS.md** - Production operator patterns implementation status
+
 ## Logging Strategy
 
 - **Info level** (default): Reconciliation events, errors, major state changes
@@ -303,3 +331,18 @@ kubectl set env deployment/pangolin-gateway-controller LOG_LEVEL=debug -n pangol
   - Use `log.V(1).Info()` for debug-level logs
   - Set via `LOG_LEVEL=debug` or `--zap-log-level=1`
   - Includes domain matching, target drift detection, resource existence checks
+
+## Operator Best Practices
+
+This controller implements production-grade operator patterns:
+
+- ✅ **Status Conditions** with `observedGeneration` tracking
+- ✅ **Conflict Retry Pattern** using `retry.RetryOnConflict()`
+- ✅ **Field Indexing** for O(1) lookups (vs O(n) scans)
+- ✅ **Controller Ownership** for automatic garbage collection
+- ✅ **Concurrent Reconciliation** (3-5 parallel per controller)
+- ✅ **Typed Errors** with `PangolinAPIError` for intelligent retry
+- ✅ **Prometheus Metrics** for observability (10+ metrics)
+- ✅ **Idempotent Reconciliation** safe to run multiple times
+
+See `OPERATOR-PATTERNS.md` for complete implementation details.
