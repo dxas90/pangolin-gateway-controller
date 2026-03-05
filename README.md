@@ -193,13 +193,76 @@ The controller can be configured via environment variables:
 | -------- | ----------- | ------- |
 | `PANGOLIN_API_KEY` | Pangolin API key (required) | - |
 | `PANGOLIN_ORG_ID` | Pangolin organization ID (required) | - |
-| `PANGOLIN_BASE_URL` | Pangolin API base URL | `https://api.pangolin.net/v1` |
+| `PANGOLIN_BASE_URL` | Integration API base URL (required) | `https://api.pangolin.net/v1` |
+| `NEWT_ENDPOINT` | Newt VPN authentication endpoint | auto-derived from `PANGOLIN_BASE_URL` |
+| `NEWT_IMAGE` | Container image for newt VPN pods | `fosrl/newt:1.10.0` |
 | `GATEWAY_CLASS_NAME` | GatewayClass name to manage | `pangolin` |
 | `WATCH_NAMESPACE` | Namespace to watch (empty for all) | `""` |
 | `METRICS_BIND_ADDRESS` | Metrics server address | `:8080` |
 | `HEALTH_PROBE_BIND_ADDRESS` | Health probe address | `:8081` |
 | `ENABLE_LEADER_ELECTION` | Enable leader election | `true` |
 | `LOG_LEVEL` | Log level (debug, info, warn, error) | `info` |
+
+> **Important — two different endpoints:**
+> 
+> `PANGOLIN_BASE_URL` is the **Integration API** used by the controller (e.g. `https://api.example.com/v1`).
+> 
+> `NEWT_ENDPOINT` is the **Pangolin server** your newt VPN pods connect to (e.g. `https://pangolin.example.com`).
+> The controller auto-derives `NEWT_ENDPOINT` by stripping `api.` and the `/v1` path from `PANGOLIN_BASE_URL`.
+> Override it only if your deployment uses different hostnames.
+
+### Annotations Reference
+
+Pangolin-specific annotations control resource behaviour:
+
+| Annotation | Resource | Values | Default | Description |
+|---|---|---|---|---|
+| `gateway.pangolin.net/disable-sso` | HTTPRoute | `"true"` / `"false"` | `"false"` (SSO enabled) | Disable Pangolin SSO for this route |
+| `gateway.pangolin.net/protocol` | GRPCRoute | `"tcp"` / `"udp"` | `"tcp"` | Layer-4 protocol for the Pangolin resource |
+
+**Disable SSO for an HTTPRoute:**
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: public-api
+  annotations:
+    gateway.pangolin.net/disable-sso: "true"   # traffic bypasses Pangolin auth
+spec:
+  parentRefs:
+    - name: example-gateway
+  hostnames:
+    - "api.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /public
+      backendRefs:
+        - name: api-service
+          port: 8080
+```
+
+**UDP service with GRPCRoute:**
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: dns-service
+  annotations:
+    gateway.pangolin.net/protocol: "udp"
+spec:
+  parentRefs:
+    - name: example-gateway
+  hostnames:
+    - "dns.example.com"
+  rules:
+    - backendRefs:
+        - name: coredns
+          port: 53
+```
 
 ### Configuration File
 

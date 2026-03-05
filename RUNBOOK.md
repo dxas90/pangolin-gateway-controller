@@ -169,6 +169,134 @@ kubectl delete pod -n pangolin-system pangolin-gateway-controller-xxx --grace-pe
 
 ## Troubleshooting
 
+### Gateway Stuck in `Programmed=false`
+
+**Symptom:**
+
+```bash
+kubectl get gateway my-gateway
+# NAME         CLASS      ADDRESS   PROGRAMMED   AGE
+# my-gateway   pangolin             False        3m
+
+kubectl describe gateway my-gateway | grep -A5 'Conditions'
+# Type: Programmed
+# Status: False
+# Reason: Invalid
+# Message: failed to create Pangolin site: ...
+```
+
+**Diagnosis steps:**
+
+```bash
+# Step 1: Read the condition message
+kubectl get gateway my-gateway -o jsonpath='{.status.conditions[?(@.type=="Programmed")].message}'
+
+# Step 2: Check controller logs for this Gateway
+kubectl logs -n pangolin-system -l app=pangolin-gateway-controller --tail=200 \
+  | grep 'my-gateway'
+
+# Step 3: Verify API credentials are valid
+SECRET=$(kubectl get secret pangolin-api-credentials -n pangolin-system \
+  -o jsonpath='{.data.apiKey}' | base64 -d)
+curl -sI -H "Authorization: Bearer $SECRET" \
+  ${PANGOLIN_BASE_URL}/org/${PANGOLIN_ORG_ID}/sites | head -1
+# Expected: HTTP/2 200
+# 401 → credentials invalid/expired
+# 000 → network unreachable
+
+# Step 4: Check the GatewayClass exists
+kubectl get gatewayclass pangolin -o yaml
+```
+
+**Common causes and fixes:**
+
+| Message | Cause | Fix |
+|---|---|---|
+| `401 Unauthorized` | API key expired or wrong key | Update `pangolin-api-credentials` secret |
+| `connection refused` / `no such host` | Wrong `PANGOLIN_BASE_URL` | Verify env var points to Integration API |
+| `site already exists` | Previous partial creation | Controller will find and reuse it automatically |
+| `GatewayClass not found` | CRD or class missing | `kubectl apply -f config/gatewayclass.yaml` |
+
+---
+
+### Newt VPN Fails to Connect
+
+**Symptom:** Traffic not reaching backends even though Gateway is `Programmed=True`.
+
+```bash
+# Check newt pod logs
+kubectl logs -l app.kubernetes.io/name=newt -n default --tail=100
+# Error examples:
+#  "401 Unauthorized" → wrong credentials or endpoint
+#  "dial tcp: no such host" → NEWT_ENDPOINT is wrong
+#  "405 Method Not Allowed" → newt connecting to Integration API instead of Pangolin server
+```
+
+**Diagnosis steps:**
+
+```bash
+# Step 1: Find the newt credential Secret for your Gateway
+kubectl get secret my-gateway-newt-cred -n default -o yaml
+
+# Step 2: Decode and verify PANGOLIN_ENDPOINT value
+# It MUST be https://pangolin.example.com — NOT https://api.example.com/v1
+kubectl get secret my-gateway-newt-cred -n default \
+  -o jsonpath='{.data.PANGOLIN_ENDPOINT}' | base64 -d
+echo
+
+# Step 3: Verify NEWT_ID is non-empty
+kubectl get secret my-gateway-newt-cred -n default \
+  -o jsonpath='{.data.NEWT_ID}' | base64 -d
+echo
+
+# Step 4: If either value is wrong, delete the Secret to force recreation
+kubectl delete secret my-gateway-newt-cred -n default
+# The controller will recreate it on next reconciliation
+```
+
+**NEWT_ENDPOINT vs PANGOLIN_BASE_URL — the most common mistake:**
+
+```
+PANGOLIN_BASE_URL = https://api.example.com/v1   ← controller uses this
+NEWT_ENDPOINT     = https://pangolin.example.com  ← newt pods connect here
+```
+
+If you set `NEWT_ENDPOINT` manually (e.g. via Helm `controller.newtEndpoint`), make sure it matches the Pangolin server hostname, not the Integration API.
+
+---
+
+### HTTPRoute Not Routing Traffic
+
+**Symptom:** HTTPRoute exists but requests return 404 or reach wrong backend.
+
+```bash
+# Check HTTPRoute status
+kubectl describe httproute my-route
+# Look for: parents[].conditions[type=Accepted].status
+# and:       parents[].conditions[type=ResolvedRefs].status
+
+# Check hostname matching — skipped hostnames appear in controller logs:
+kubectl logs -n pangolin-system -l app=pangolin-gateway-controller --tail=100 \
+  | grep -i 'skipping hostname\|no matching domain'
+# If you see: "Skipping hostname that doesn't match any Pangolin domain"
+# It means the hostname is not registered in your Pangolin org.
+```
+
+**Verify from Pangolin side:**
+
+```bash
+# List Pangolin resources for your org
+curl -s -H "Authorization: Bearer $PANGOLIN_API_KEY" \
+  ${PANGOLIN_BASE_URL}/org/${PANGOLIN_ORG_ID}/resources | jq '.data.resources[] | {name,id}'
+
+# List targets for a given resource
+RESOURCE_ID=<id from above>
+curl -s -H "Authorization: Bearer $PANGOLIN_API_KEY" \
+  ${PANGOLIN_BASE_URL}/resource/${RESOURCE_ID}/targets | jq '.data.targets[]'
+```
+
+---
+
 ### High Reconciliation Latency
 
 **Symptom:** `controller_runtime_reconcile_time_seconds` p99 > 5s
