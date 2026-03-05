@@ -1,11 +1,18 @@
 # Image URL to use all building/pushing image targets
-IMG ?= pangolin-gateway-controller:latest
+IMAGE_TAG_BASE ?= pangolin-gateway-controller
+VERSION ?= latest
+IMG ?= $(IMAGE_TAG_BASE):$(VERSION)
 
 # Pin toolchain to match go.mod (avoids golang.org/x/net Go 1.26 stdlib incompatibility)
 export GOTOOLCHAIN=go1.25.7
 
-# Kubernetes version for envtest binaries
+# Go settings
 ENVTEST_K8S_VERSION ?= 1.31.x
+GOARCH ?= $(shell go env GOARCH)
+GOOS ?= $(shell go env GOOS)
+
+# Container tool
+CONTAINER_TOOL ?= docker
 
 # Local bin directory for tools
 LOCALBIN ?= $(shell pwd)/bin
@@ -18,6 +25,14 @@ GOBIN=$(shell go env GOPATH)/bin
 else
 GOBIN=$(shell go env GOBIN)
 endif
+
+# Tool binaries
+ENVTEST ?= $(LOCALBIN)/setup-envtest
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+
+# Tool versions
+ENVTEST_VERSION ?= release-0.19
+GOLANGCI_LINT_VERSION ?= v1.57.2
 
 .PHONY: all
 all: build
@@ -40,17 +55,26 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(LOCALBIN)/setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN)/k8s -p path)" \
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN)/k8s -p path)" \
 		go test ./pkg/... -coverprofile cover.out
 
 .PHONY: envtest
-envtest: $(LOCALBIN) ## Download setup-envtest locally if necessary.
-	@test -f $(LOCALBIN)/setup-envtest || \
-		GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: lint
-lint: ## Run golangci-lint.
-	golangci-lint run
+lint: golangci-lint ## Run golangci-lint.
+	$(GOLANGCI_LINT) run
+
+.PHONY: lint-fix
+lint-fix: golangci-lint ## Run golangci-lint and perform fixes.
+	$(GOLANGCI_LINT) run --fix
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT)
+$(GOLANGCI_LINT): $(LOCALBIN)
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
 
 ##@ Build
 
@@ -64,13 +88,29 @@ run: fmt vet ## Run controller from your host.
 
 .PHONY: docker-build
 docker-build: ## Build docker image.
-	docker build -t ${IMG} .
+	$(CONTAINER_TOOL) build -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image.
-	docker push ${IMG}
+	$(CONTAINER_TOOL) push ${IMG}
+
+.PHONY: docker-buildx
+docker-buildx: ## Build and push docker image for cross-platform support.
+	- $(CONTAINER_TOOL) buildx create --name project-builder
+	$(CONTAINER_TOOL) buildx use project-builder
+	- $(CONTAINER_TOOL) buildx build --push --platform linux/arm64,linux/amd64 --tag ${IMG} .
+	- $(CONTAINER_TOOL) buildx rm project-builder
 
 ##@ Deployment
+
+.PHONY: kind-load
+kind-load: ## Load image into kind cluster.
+	kind load docker-image ${IMG}
+
+.PHONY: one-local
+one-local: docker-build kind-load ## Build image, load into kind, install CRDs, and deploy controller.
+	$(MAKE) install
+	$(MAKE) deploy
 
 .PHONY: install
 install: ## Install Gateway API CRDs.
@@ -117,3 +157,12 @@ tidy: ## Tidy go.mod.
 .PHONY: vendor
 vendor: ## Vendor dependencies.
 	go mod vendor
+
+# go-install-tool will 'go install' any package with custom target and name
+define go-install-tool
+@[ -f "$(1)" ] || { \
+set -e; \
+echo "Downloading $(2)@$(3)" ;\
+GOBIN=$(LOCALBIN) go install $(2)@$(3) ;\
+}
+endef
