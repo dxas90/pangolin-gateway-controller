@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -129,18 +130,33 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 func (r *NewtReconciler) ensureNewtDeployment(ctx context.Context, gateway *gatewayv1.Gateway, site *pangolin.Site, log logr.Logger) error {
 	// Create secret with newt credentials
 	secret := r.buildNewtSecret(gateway, site)
+	secret.APIVersion = "v1"
+	secret.Kind = "Secret"
+	if err := controllerutil.SetControllerReference(gateway, secret, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner on newt secret: %w", err)
+	}
 	if err := r.applyResource(ctx, secret); err != nil {
 		return fmt.Errorf("failed to apply newt secret: %w", err)
 	}
 
 	// Create deployment
 	deployment := r.buildNewtDeployment(gateway, site)
+	deployment.APIVersion = "apps/v1"
+	deployment.Kind = "Deployment"
+	if err := controllerutil.SetControllerReference(gateway, deployment, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner on newt deployment: %w", err)
+	}
 	if err := r.applyResource(ctx, deployment); err != nil {
 		return fmt.Errorf("failed to apply newt deployment: %w", err)
 	}
 
 	// Create service
 	service := r.buildNewtService(gateway, site)
+	service.APIVersion = "v1"
+	service.Kind = "Service"
+	if err := controllerutil.SetControllerReference(gateway, service, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner on newt service: %w", err)
+	}
 	if err := r.applyResource(ctx, service); err != nil {
 		return fmt.Errorf("failed to apply newt service: %w", err)
 	}
@@ -164,15 +180,6 @@ func (r *NewtReconciler) buildNewtSecret(gateway *gatewayv1.Gateway, site *pango
 				"app.kubernetes.io/instance":   gateway.Name,
 				"app.kubernetes.io/managed-by": "pangolin-gateway-controller",
 				NewtSecretLabel:                gateway.Name,
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: gateway.APIVersion,
-					Kind:       gateway.Kind,
-					Name:       gateway.Name,
-					UID:        gateway.UID,
-					Controller: ptr(true),
-				},
 			},
 		},
 		StringData: map[string]string{
@@ -205,15 +212,6 @@ func (r *NewtReconciler) buildNewtDeployment(gateway *gatewayv1.Gateway, site *p
 				"app.kubernetes.io/managed-by": "pangolin-gateway-controller",
 				"app.kubernetes.io/component":  "newt",
 				NewtDeploymentLabel:            gateway.Name,
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: gateway.APIVersion,
-					Kind:       gateway.Kind,
-					Name:       gateway.Name,
-					UID:        gateway.UID,
-					Controller: ptr(true),
-				},
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -353,15 +351,6 @@ func (r *NewtReconciler) buildNewtService(gateway *gatewayv1.Gateway, site *pang
 				"app.kubernetes.io/instance":   gateway.Name,
 				"app.kubernetes.io/managed-by": "pangolin-gateway-controller",
 				NewtServiceLabel:               gateway.Name,
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: gateway.APIVersion,
-					Kind:       gateway.Kind,
-					Name:       gateway.Name,
-					UID:        gateway.UID,
-					Controller: ptr(true),
-				},
 			},
 		},
 		Spec: corev1.ServiceSpec{

@@ -35,16 +35,12 @@ type IntegrationTestSuite struct {
 func (s *IntegrationTestSuite) SetupSuite() {
 	s.EnvTestSuite.SetupSuite()
 	s.testNamespace = testutil.TestNamespace
-}
 
-// SetupTest runs before each test.
-func (s *IntegrationTestSuite) SetupTest() {
-	// Create test namespace
+	// Create namespace + GatewayClass once for the entire suite
 	ns := testutil.NewTestNamespace(s.testNamespace)
 	err := s.Client().Create(s.Context(), ns)
 	s.Require().NoError(err)
 
-	// Create GatewayClass
 	gatewayClass := &gatewayv1.GatewayClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testutil.TestGatewayClass,
@@ -55,7 +51,10 @@ func (s *IntegrationTestSuite) SetupTest() {
 	}
 	err = s.Client().Create(s.Context(), gatewayClass)
 	s.Require().NoError(err)
+}
 
+// SetupTest runs before each test.
+func (s *IntegrationTestSuite) SetupTest() {
 	// Create fresh mock for each test
 	s.mockPangolin = testutil.NewMockPangolinClient()
 
@@ -80,10 +79,11 @@ func (s *IntegrationTestSuite) SetupTest() {
 	}
 
 	s.newtReconciler = &controller.NewtReconciler{
-		Client: s.Client(),
-		Log:    ctrl.Log.WithName("test").WithName("Newt"),
-		Scheme: s.Client().Scheme(),
-		Config: cfg,
+		Client:    s.Client(),
+		Log:       ctrl.Log.WithName("test").WithName("Newt"),
+		Scheme:    s.Client().Scheme(),
+		Config:    cfg,
+		NewtImage: controller.NewtImage,
 	}
 
 	s.httpRouteReconciler = &controller.HTTPRouteReconciler{
@@ -107,21 +107,56 @@ func (s *IntegrationTestSuite) SetupTest() {
 
 // TearDownTest runs after each test.
 func (s *IntegrationTestSuite) TearDownTest() {
-	// Clean up namespace
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: s.testNamespace,
-		},
-	}
-	_ = s.Client().Delete(s.Context(), ns)
+	ctx := s.Context()
+	ns := client.InNamespace(s.testNamespace)
 
-	// Clean up GatewayClass
-	gc := &gatewayv1.GatewayClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: testutil.TestGatewayClass,
-		},
+	// Strip finalizers from HTTPRoutes so they can be deleted immediately
+	var httpRoutes gatewayv1.HTTPRouteList
+	_ = s.Client().List(ctx, &httpRoutes, ns)
+	for i := range httpRoutes.Items {
+		hr := httpRoutes.Items[i].DeepCopy()
+		if len(hr.Finalizers) > 0 {
+			patch := client.MergeFrom(hr.DeepCopy())
+			hr.Finalizers = nil
+			_ = s.Client().Patch(ctx, hr, patch)
+		}
 	}
-	_ = s.Client().Delete(s.Context(), gc)
+
+	// Strip finalizers from GRPCRoutes so they can be deleted immediately
+	var grpcRoutes gatewayv1.GRPCRouteList
+	_ = s.Client().List(ctx, &grpcRoutes, ns)
+	for i := range grpcRoutes.Items {
+		gr := grpcRoutes.Items[i].DeepCopy()
+		if len(gr.Finalizers) > 0 {
+			patch := client.MergeFrom(gr.DeepCopy())
+			gr.Finalizers = nil
+			_ = s.Client().Patch(ctx, gr, patch)
+		}
+	}
+
+	// Strip finalizers from Gateways so they can be deleted immediately
+	var gateways gatewayv1.GatewayList
+	_ = s.Client().List(ctx, &gateways, ns)
+	for i := range gateways.Items {
+		gw := gateways.Items[i].DeepCopy()
+		if len(gw.Finalizers) > 0 {
+			patch := client.MergeFrom(gw.DeepCopy())
+			gw.Finalizers = nil
+			_ = s.Client().Patch(ctx, gw, patch)
+		}
+	}
+
+	_ = s.Client().DeleteAllOf(ctx, &corev1.Service{}, ns)
+	_ = s.Client().DeleteAllOf(ctx, &gatewayv1.HTTPRoute{}, ns)
+	_ = s.Client().DeleteAllOf(ctx, &gatewayv1.GRPCRoute{}, ns)
+	_ = s.Client().DeleteAllOf(ctx, &gatewayv1.Gateway{}, ns)
+
+	// Wait until all Gateways are gone before the next test's SetupTest creates them
+	s.Require().Eventually(func() bool {
+		var list gatewayv1.GatewayList
+		_ = s.Client().List(ctx, &list, ns)
+		return len(list.Items) == 0
+	}, 30*time.Second, 100*time.Millisecond, "gateways should be deleted")
 
 	// Verify all mock expectations
 	s.mockPangolin.AssertExpectations(s.T())
@@ -155,9 +190,9 @@ func (s *IntegrationTestSuite) TestEndToEnd_GatewayCreation() {
 		ExitNodeID: siteDefaults.ExitNodeID,
 	}
 
-	s.mockPangolin.On("ListSites", s.Context()).Return([]pangolin.Site{}, nil).Once()
-	s.mockPangolin.On("PickSiteDefaults", s.Context()).Return(siteDefaults, nil).Once()
-	s.mockPangolin.On("CreateSite", s.Context(), testutil.MockAnything).Return(createdSite, nil).Once()
+	s.mockPangolin.On("ListSites", testutil.MockAnything).Return([]pangolin.Site{}, nil).Once()
+	s.mockPangolin.On("PickSiteDefaults", testutil.MockAnything).Return(siteDefaults, nil).Once()
+	s.mockPangolin.On("CreateSite", testutil.MockAnything, testutil.MockAnything).Return(createdSite, nil).Once()
 
 	// Step 1: Reconcile Gateway to create Site and Secret
 	req := reconcile.Request{
@@ -232,7 +267,6 @@ func (s *IntegrationTestSuite) TestEndToEnd_HTTPRouteReconciliation() {
 			Namespace: s.testNamespace,
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: "10.96.0.1",
 			Ports: []corev1.ServicePort{
 				{
 					Port: 80,
@@ -268,13 +302,13 @@ func (s *IntegrationTestSuite) TestEndToEnd_HTTPRouteReconciliation() {
 		"port":     float64(80),
 	}
 
-	s.mockPangolin.On("ListDomains", s.Context()).Return(domains, nil).Maybe()
-	s.mockPangolin.On("ListResources", s.Context()).Return([]map[string]interface{}{}, nil).Once()
-	s.mockPangolin.On("CreateResource", s.Context(), testutil.MockAnything).Return(resource, nil).Once()
-	s.mockPangolin.On("UpdateResource", s.Context(), "resource-123", testutil.MockAnything).Return(nil).Maybe()
-	s.mockPangolin.On("DisableSSO", s.Context(), "resource-123").Return(nil).Maybe()
-	s.mockPangolin.On("ListTargetsRaw", s.Context(), "resource-123").Return([]map[string]interface{}{}, nil).Once()
-	s.mockPangolin.On("CreateTargetRaw", s.Context(), "resource-123", testutil.MockAnything).Return(target, nil).Once()
+	s.mockPangolin.On("ListDomains", testutil.MockAnything).Return(domains, nil).Maybe()
+	s.mockPangolin.On("ListResources", testutil.MockAnything).Return([]map[string]interface{}{}, nil).Once()
+	s.mockPangolin.On("CreateResource", testutil.MockAnything, testutil.MockAnything).Return(resource, nil).Once()
+	s.mockPangolin.On("UpdateResource", testutil.MockAnything, "resource-123", testutil.MockAnything).Return(nil).Maybe()
+	s.mockPangolin.On("DisableSSO", testutil.MockAnything, "resource-123").Return(nil).Maybe()
+	s.mockPangolin.On("ListTargetsRaw", testutil.MockAnything, "resource-123").Return([]map[string]interface{}{}, nil).Once()
+	s.mockPangolin.On("CreateTargetRaw", testutil.MockAnything, "resource-123", testutil.MockAnything).Return(target, nil).Once()
 
 	// Reconcile HTTPRoute
 	req := reconcile.Request{
@@ -320,7 +354,7 @@ func (s *IntegrationTestSuite) TestEndToEnd_GatewayDeletion() {
 	s.Require().NoError(err)
 
 	// Mock expects delete call
-	s.mockPangolin.On("DeleteSite", s.Context(), 12345).Return(nil).Once()
+	s.mockPangolin.On("DeleteSite", testutil.MockAnything, 12345).Return(nil).Once()
 
 	// Delete Gateway
 	err = s.Client().Delete(s.Context(), gateway)
@@ -363,7 +397,6 @@ func (s *IntegrationTestSuite) TestEndToEnd_GRPCRouteReconciliation() {
 			Namespace: s.testNamespace,
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: "10.96.0.2",
 			Ports: []corev1.ServicePort{
 				{
 					Port: 5432,
@@ -400,10 +433,10 @@ func (s *IntegrationTestSuite) TestEndToEnd_GRPCRouteReconciliation() {
 		"port":     float64(5432),
 	}
 
-	s.mockPangolin.On("ListDomains", s.Context()).Return(domains, nil).Maybe()
-	s.mockPangolin.On("CreateResource", s.Context(), testutil.MockAnything).Return(resource, nil).Once()
-	s.mockPangolin.On("ListTargetsRaw", s.Context(), "resource-789").Return([]map[string]interface{}{}, nil).Once()
-	s.mockPangolin.On("CreateTargetRaw", s.Context(), "resource-789", testutil.MockAnything).Return(target, nil).Once()
+	s.mockPangolin.On("ListDomains", testutil.MockAnything).Return(domains, nil).Maybe()
+	s.mockPangolin.On("CreateResource", testutil.MockAnything, testutil.MockAnything).Return(resource, nil).Once()
+	s.mockPangolin.On("ListTargetsRaw", testutil.MockAnything, "resource-789").Return([]map[string]interface{}{}, nil).Once()
+	s.mockPangolin.On("CreateTargetRaw", testutil.MockAnything, "resource-789", testutil.MockAnything).Return(target, nil).Once()
 
 	// Reconcile GRPCRoute
 	req := reconcile.Request{

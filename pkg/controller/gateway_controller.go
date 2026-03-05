@@ -352,20 +352,17 @@ func (r *GatewayReconciler) createNewtCredentialsSecret(ctx context.Context, gat
 				"app.kubernetes.io/instance":   gateway.Name,
 				"app.kubernetes.io/managed-by": "pangolin-gateway-controller",
 			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: gateway.APIVersion,
-					Kind:       gateway.Kind,
-					Name:       gateway.Name,
-					UID:        gateway.UID,
-					Controller: ptr(true),
-				},
-			},
 		},
 		StringData: map[string]string{
 			"NEWT_ID":     site.NewtID,
 			"NEWT_SECRET": site.Secret,
 		},
+	}
+
+	if r.Scheme != nil {
+		if err := controllerutil.SetControllerReference(gateway, secret, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set owner reference on secret: %w", err)
+		}
 	}
 
 	if err := r.Create(ctx, secret); err != nil {

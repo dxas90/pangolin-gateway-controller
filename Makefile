@@ -4,6 +4,14 @@ IMG ?= pangolin-gateway-controller:latest
 # Pin toolchain to match go.mod (avoids golang.org/x/net Go 1.26 stdlib incompatibility)
 export GOTOOLCHAIN=go1.25.7
 
+# Kubernetes version for envtest binaries
+ENVTEST_K8S_VERSION ?= 1.31.x
+
+# Local bin directory for tools
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -31,8 +39,14 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: fmt vet ## Run tests.
-	go test ./pkg/... -coverprofile cover.out
+test: fmt vet envtest ## Run tests.
+	KUBEBUILDER_ASSETS="$(shell $(LOCALBIN)/setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN)/k8s -p path)" \
+		go test ./pkg/... -coverprofile cover.out
+
+.PHONY: envtest
+envtest: $(LOCALBIN) ## Download setup-envtest locally if necessary.
+	@test -f $(LOCALBIN)/setup-envtest || \
+		GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 .PHONY: lint
 lint: ## Run golangci-lint.
@@ -60,11 +74,11 @@ docker-push: ## Push docker image.
 
 .PHONY: install
 install: ## Install Gateway API CRDs.
-	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
 
 .PHONY: uninstall
 uninstall: ## Uninstall Gateway API CRDs.
-	kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+	kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
 
 .PHONY: deploy
 deploy: ## Deploy controller to the K8s cluster.

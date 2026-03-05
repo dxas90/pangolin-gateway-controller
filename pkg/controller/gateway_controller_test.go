@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -29,15 +30,15 @@ type GatewayControllerTestSuite struct {
 func (s *GatewayControllerTestSuite) SetupSuite() {
 	s.EnvTestSuite.SetupSuite()
 	s.testNamespace = testutil.TestNamespace
+
+	// Create namespace once for the entire suite
+	ns := testutil.NewTestNamespace(s.testNamespace)
+	err := s.Client().Create(s.Context(), ns)
+	s.Require().NoError(err)
 }
 
 // SetupTest runs before each test.
 func (s *GatewayControllerTestSuite) SetupTest() {
-	// Create test namespace
-	ns := testutil.NewTestNamespace(s.testNamespace)
-	err := s.Client().Create(s.Context(), ns)
-	s.Require().NoError(err)
-
 	// Create fresh mock for each test
 	s.mockPangolin = testutil.NewMockPangolinClient()
 
@@ -48,18 +49,34 @@ func (s *GatewayControllerTestSuite) SetupTest() {
 		Scheme:          s.Client().Scheme(),
 		PangolinClient:  s.mockPangolin,
 		ControllerClass: testutil.TestGatewayClass,
+		Recorder:        record.NewFakeRecorder(100),
 	}
 }
 
 // TearDownTest runs after each test.
 func (s *GatewayControllerTestSuite) TearDownTest() {
-	// Clean up namespace
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: s.testNamespace,
-		},
+	ctx := s.Context()
+	ns := client.InNamespace(s.testNamespace)
+
+	// Strip finalizers from Gateways so they can be deleted immediately
+	var gateways gatewayv1.GatewayList
+	_ = s.Client().List(ctx, &gateways, ns)
+	for i := range gateways.Items {
+		gw := gateways.Items[i].DeepCopy()
+		if len(gw.Finalizers) > 0 {
+			patch := client.MergeFrom(gw.DeepCopy())
+			gw.Finalizers = nil
+			_ = s.Client().Patch(ctx, gw, patch)
+		}
 	}
-	_ = s.Client().Delete(s.Context(), ns)
+	_ = s.Client().DeleteAllOf(ctx, &gatewayv1.Gateway{}, ns)
+
+	// Wait until Gateways are gone
+	s.Require().Eventually(func() bool {
+		var list gatewayv1.GatewayList
+		_ = s.Client().List(ctx, &list, ns)
+		return len(list.Items) == 0
+	}, 30*time.Second, 100*time.Millisecond, "gateways should be deleted")
 
 	// Verify all mock expectations
 	s.mockPangolin.AssertExpectations(s.T())
@@ -93,9 +110,9 @@ func (s *GatewayControllerTestSuite) TestReconcile_NewGateway() {
 		ExitNodeID: siteDefaults.ExitNodeID,
 	}
 
-	s.mockPangolin.On("ListSites", s.Context()).Return([]pangolin.Site{}, nil).Once()
-	s.mockPangolin.On("PickSiteDefaults", s.Context()).Return(siteDefaults, nil).Once()
-	s.mockPangolin.On("CreateSite", s.Context(), testutil.MockAnything).Return(createdSite, nil).Once()
+	s.mockPangolin.On("ListSites", testutil.MockAnything).Return([]pangolin.Site{}, nil).Once()
+	s.mockPangolin.On("PickSiteDefaults", testutil.MockAnything).Return(siteDefaults, nil).Once()
+	s.mockPangolin.On("CreateSite", testutil.MockAnything, testutil.MockAnything).Return(createdSite, nil).Once()
 
 	// Reconcile
 	req := reconcile.Request{
@@ -169,7 +186,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway() {
 		Name:   "pgc-" + testutil.TestGatewayName,
 		Online: true,
 	}
-	s.mockPangolin.On("ListSites", s.Context()).Return([]pangolin.Site{existingSite}, nil).Once()
+	s.mockPangolin.On("ListSites", testutil.MockAnything).Return([]pangolin.Site{existingSite}, nil).Once()
 
 	// Reconcile
 	req := reconcile.Request{
@@ -196,7 +213,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_DeleteGateway() {
 	s.Require().NoError(err)
 
 	// Mock expects delete call
-	s.mockPangolin.On("DeleteSite", s.Context(), 12345).Return(nil).Once()
+	s.mockPangolin.On("DeleteSite", testutil.MockAnything, 12345).Return(nil).Once()
 
 	// Delete the Gateway
 	err = s.Client().Delete(s.Context(), gateway)

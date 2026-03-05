@@ -204,9 +204,9 @@ The controller can be configured via environment variables:
 | `LOG_LEVEL` | Log level (debug, info, warn, error) | `info` |
 
 > **Important — two different endpoints:**
-> 
+>
 > `PANGOLIN_BASE_URL` is the **Integration API** used by the controller (e.g. `https://api.example.com/v1`).
-> 
+>
 > `NEWT_ENDPOINT` is the **Pangolin server** your newt VPN pods connect to (e.g. `https://pangolin.example.com`).
 > The controller auto-derives `NEWT_ENDPOINT` by stripping `api.` and the `/v1` path from `PANGOLIN_BASE_URL`.
 > Override it only if your deployment uses different hostnames.
@@ -216,7 +216,7 @@ The controller can be configured via environment variables:
 Pangolin-specific annotations control resource behaviour:
 
 | Annotation | Resource | Values | Default | Description |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `gateway.pangolin.net/disable-sso` | HTTPRoute | `"true"` / `"false"` | `"false"` (SSO enabled) | Disable Pangolin SSO for this route |
 | `gateway.pangolin.net/protocol` | GRPCRoute | `"tcp"` / `"udp"` | `"tcp"` | Layer-4 protocol for the Pangolin resource |
 

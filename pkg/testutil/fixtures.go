@@ -139,8 +139,7 @@ func NewTestService(name, namespace string) *corev1.Service {
 			Namespace: namespace,
 		},
 		Spec: corev1.ServiceSpec{
-			Type:      corev1.ServiceTypeClusterIP,
-			ClusterIP: "10.96.0.100", // Fake ClusterIP for testing
+			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
 				{
 					Name:     "http",

@@ -1,6 +1,6 @@
 module github.com/dxas90/pangolin-gateway-controller
 
-go 1.26
+go 1.25.0
 
 require (
 	k8s.io/api v0.35.1
@@ -70,9 +70,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-// golang.org/x/net v0.47+ introduced config_go126.go that references
-// net/http.HTTP2Config.StrictMaxConcurrentRequests which doesn't exist in the final
-// Go 1.26.0 release. Pin to v0.44.0 which doesn't have this issue.
-// Track: https://github.com/golang/net/issues/xxx
-replace golang.org/x/net => golang.org/x/net v0.44.0
