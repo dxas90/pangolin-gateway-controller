@@ -55,10 +55,12 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		Message:            "GatewayClass accepted by Pangolin Gateway Controller",
 	}
 
-	// Check if condition already exists and is up to date
+	// Check if condition already exists and is up to date; append or update in a single pass
 	needsUpdate := true
+	found := false
 	for i, cond := range gatewayClass.Status.Conditions {
 		if cond.Type == acceptedCondition.Type {
+			found = true
 			if cond.Status == acceptedCondition.Status &&
 				cond.Reason == acceptedCondition.Reason &&
 				cond.ObservedGeneration == acceptedCondition.ObservedGeneration {
@@ -69,20 +71,11 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			break
 		}
 	}
+	if !found {
+		gatewayClass.Status.Conditions = append(gatewayClass.Status.Conditions, acceptedCondition)
+	}
 
 	if needsUpdate {
-		// Add condition if it doesn't exist
-		found := false
-		for _, cond := range gatewayClass.Status.Conditions {
-			if cond.Type == acceptedCondition.Type {
-				found = true
-				break
-			}
-		}
-		if !found {
-			gatewayClass.Status.Conditions = append(gatewayClass.Status.Conditions, acceptedCondition)
-		}
-
 		// Update status
 		if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			current := &gatewayv1.GatewayClass{}

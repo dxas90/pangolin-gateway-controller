@@ -10,6 +10,7 @@ type ClientInterface interface {
 	// Site operations
 	PickSiteDefaults(ctx context.Context) (*SiteDefaults, error)
 	CreateSite(ctx context.Context, site *Site) (*Site, error)
+	GetSite(ctx context.Context, siteID string) (*Site, error)
 	ListSites(ctx context.Context) ([]Site, error)
 	DeleteSite(ctx context.Context, siteID int) error
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
@@ -24,6 +25,52 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+// extractSubdomainFromDomains finds the subdomain and domain ID for a given hostname
+// from the list of Pangolin domains. Uses "baseDomain" field as per Pangolin API.
+func extractSubdomainFromDomains(hostname string, domains []map[string]interface{}) (subdomain, domainID string, err error) {
+	for _, domain := range domains {
+		base, _ := domain["baseDomain"].(string)
+		id, _ := domain["domainId"].(string)
+		if base == "" || id == "" {
+			continue
+		}
+		if strings.HasSuffix(hostname, "."+base) || hostname == base {
+			subdomain = strings.TrimSuffix(hostname, "."+base)
+			if subdomain == hostname {
+				subdomain = hostname // exact match, use as-is
+			}
+			return subdomain, id, nil
+		}
+	}
+	return "", "", fmt.Errorf("no matching domain found for hostname %s", hostname)
+}
+
+// numericToString converts numeric interface values to string for comparison
+func numericToString(v interface{}) string {
+	switch n := v.(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", n)
+	case int:
+		return strconv.Itoa(n)
+	case int64:
+		return strconv.FormatInt(n, 10)
+	case string:
+		return n
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// sanitizeEventMessage truncates error messages for Kubernetes events to avoid
+// leaking large API response bodies into event records.
+func sanitizeEventMessage(err error) string {
+	msg := err.Error()
+	if len(msg) > 200 {
+		return msg[:200] + "..."
+	}
+	return msg
+}
 
 // HTTPRouteReconciler reconciles HTTPRoute resources
 type HTTPRouteReconciler struct {
@@ -93,8 +140,8 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 		default:
 		}
 
-		// Find the resource for this hostname (search by resource name)
-		resourceID, err := r.findExistingResourceBySubdomain(ctx, string(hostname), log)
+		// Find the resource for this hostname by querying the API
+		resourceID, err := r.findExistingResourceBySubdomainAPI(ctx, string(hostname), log)
 		if err != nil || resourceID == "" {
 			log.Info("Resource not found, skipping target deletion", "hostname", hostname)
 			continue
@@ -108,7 +155,7 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 		}
 
 		// Delete targets that belong to this HTTPRoute (match by route namespace/name in target metadata)
-		targetsDeleted := 0
+		var remainingTargets []map[string]interface{}
 		for _, target := range existingTargets {
 			// Check for context cancellation in target deletion loop
 			select {
@@ -119,6 +166,7 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 
 			targetIDFloat, ok := target["targetId"].(float64)
 			if !ok {
+				remainingTargets = append(remainingTargets, target)
 				continue
 			}
 			targetID := fmt.Sprintf("%.0f", targetIDFloat)
@@ -141,22 +189,22 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 
 			if !shouldDelete {
 				log.V(1).Info("Skipping target from different HTTPRoute", "targetId", targetID)
+				remainingTargets = append(remainingTargets, target)
 				continue
 			}
 
 			log.Info("Deleting target", "targetId", targetID, "resourceID", resourceID, "hostname", hostname)
 			if err := r.PangolinClient.DeleteTarget(ctx, targetID); err != nil {
 				log.Error(err, "Failed to delete target", "targetId", targetID)
-			} else {
-				targetsDeleted++
+				remainingTargets = append(remainingTargets, target)
 			}
 		}
 
-		log.Info("Deleted targets for hostname", "hostname", hostname, "resourceID", resourceID, "count", targetsDeleted)
+		deletedCount := len(existingTargets) - len(remainingTargets)
+		log.Info("Deleted targets for hostname", "hostname", hostname, "resourceID", resourceID, "count", deletedCount)
 
-		// Check if any targets remain
-		remainingTargets, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
-		if err == nil && len(remainingTargets) == 0 {
+		// Use the remaining targets slice to determine whether to delete the resource
+		if len(remainingTargets) == 0 {
 			// No targets left, delete the resource
 			log.Info("No targets remain, deleting resource", "resourceID", resourceID, "hostname", hostname)
 			if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
@@ -220,11 +268,31 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 		return ctrl.Result{}, nil
 	}
 
+	// Cache domain list once for the entire reconciliation
+	domains, err := r.PangolinClient.ListDomains(ctx)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list domains: %w", err)
+	}
+
+	// Cache resource list once and build a name→resourceID map
+	allResources, err := r.PangolinClient.ListResources(ctx)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list resources: %w", err)
+	}
+	resourcesByName := make(map[string]string)
+	for _, res := range allResources {
+		if name, ok := res["name"].(string); ok {
+			if id, ok := res["resourceId"].(string); ok {
+				resourcesByName[name] = id
+			}
+		}
+	}
+
 	// Process each hostname
 	processedHostnames := 0
 	for _, hostname := range route.Spec.Hostnames {
 		// Extract subdomain for resource creation (still needed for Pangolin API)
-		subdomain, err := r.extractSubdomain(ctx, string(hostname), log)
+		subdomain, _, err := extractSubdomainFromDomains(string(hostname), domains)
 		if err != nil {
 			// Skip hostnames that don't match any Pangolin domain
 			log.Info("Skipping hostname that doesn't match any Pangolin domain", "hostname", hostname)
@@ -232,21 +300,16 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 		}
 
 		// Check if resource already exists for this hostname (search by resource name)
-		resourceID, err := r.findExistingResourceBySubdomain(ctx, string(hostname), log)
-		if err != nil {
-			log.Error(err, "Failed to check for existing resource", "hostname", hostname)
-			r.updateRouteStatus(ctx, route, false, "ResourceLookupFailed", err.Error())
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-		}
+		resourceID := r.findExistingResourceBySubdomainFromMap(string(hostname), resourcesByName)
 
 		if resourceID == "" {
 			// Create new resource using hostname as name (e.g., "test.dev0ps.me")
 			resourceName := string(hostname)
-			newResourceID, err := r.createPangolinResourceForHostname(ctx, route, gateway, string(hostname), resourceName, log)
+			newResourceID, err := r.createPangolinResourceForHostname(ctx, route, gateway, string(hostname), resourceName, domains, log)
 			if err != nil {
 				log.Error(err, "Failed to create Pangolin resource", "hostname", hostname)
 				r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
-				r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource for hostname %s: %s", hostname, err.Error())
+				r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource for hostname %s: %s", hostname, sanitizeEventMessage(err))
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
 			resourceID = newResourceID
@@ -260,7 +323,7 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 		if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
 			log.Error(err, "Failed to reconcile targets", "resourceID", resourceID, "hostname", hostname)
 			r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
-			r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets for hostname %s: %s", hostname, err.Error())
+			r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets for hostname %s: %s", hostname, sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 		processedHostnames++
@@ -383,8 +446,8 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 			for _, target := range existingTargets {
 				if fmt.Sprintf("%v", target["ip"]) == clusterIP &&
-					fmt.Sprintf("%v", target["port"]) == fmt.Sprintf("%d", port) &&
-					fmt.Sprintf("%v", target["siteId"]) == fmt.Sprintf("%d", siteIDInt) &&
+					numericToString(target["port"]) == strconv.Itoa(port) &&
+					numericToString(target["siteId"]) == strconv.Itoa(siteIDInt) &&
 					fmt.Sprintf("%v", target["path"]) == path {
 					targetExists = true
 					existingTargetID = fmt.Sprintf("%v", target["targetId"])
@@ -397,7 +460,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 						needsUpdate = true
 						log.Info("Target drift detected: pathMatchType changed", "targetId", existingTargetID, "old", target["pathMatchType"], "new", pathMatchType)
 					}
-					if fmt.Sprintf("%v", target["priority"]) != fmt.Sprintf("%d", priority) {
+					if numericToString(target["priority"]) != strconv.Itoa(priority) {
 						needsUpdate = true
 						log.Info("Target drift detected: priority changed", "targetId", existingTargetID, "old", target["priority"], "new", priority)
 					}
@@ -518,85 +581,26 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	return nil
 }
 
-// extractSubdomain extracts the subdomain part from a full hostname by removing the domain suffix
-func (r *HTTPRouteReconciler) extractSubdomain(ctx context.Context, hostname string, log logr.Logger) (string, error) {
-	// Get organization domains
-	domains, err := r.PangolinClient.ListDomains(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to list organization domains: %w", err)
+// findExistingResourceBySubdomainFromMap looks up a resource ID from a pre-fetched name map.
+// Returns empty string if not found or if resourcesByName is nil.
+func (r *HTTPRouteReconciler) findExistingResourceBySubdomainFromMap(hostname string, resourcesByName map[string]string) string {
+	if resourcesByName == nil {
+		return ""
 	}
-
-	log.V(1).Info("Checking domains for hostname", "hostname", hostname, "domainCount", len(domains))
-
-	// Match hostname against organization domains to extract subdomain
-	for _, domain := range domains {
-		domainName, ok := domain["baseDomain"].(string)
-		if !ok {
-			continue
-		}
-
-		log.V(1).Info("Checking domain", "hostname", hostname, "domainName", domainName, "hostnameLen", len(hostname), "domainLen", len(domainName))
-
-		// Check if hostname ends with this domain
-		if len(hostname) > len(domainName) && hostname[len(hostname)-len(domainName):] == domainName {
-			// Extract subdomain by removing the domain suffix
-			// Example: "test.dev0ps.me" with domain "dev0ps.me" -> "test"
-			if hostname[len(hostname)-len(domainName)-1] == '.' {
-				subdomain := hostname[:len(hostname)-len(domainName)-1]
-				log.V(1).Info("Extracted subdomain with dot", "hostname", hostname, "domain", domainName, "subdomain", subdomain)
-				return subdomain, nil
-			}
-			subdomain := hostname[:len(hostname)-len(domainName)]
-			log.V(1).Info("Extracted subdomain without dot", "hostname", hostname, "domain", domainName, "subdomain", subdomain)
-			return subdomain, nil
-		}
-	}
-
-	// If no domain matches, return error - hostname doesn't match any Pangolin domain
-	log.Info("Hostname does not match any Pangolin domain, skipping", "hostname", hostname, "availableDomains", len(domains))
-	return "", fmt.Errorf("hostname %s does not match any Pangolin domain", hostname)
+	return resourcesByName[hostname]
 }
 
-// verifyOrRecreateResourceForHostname checks if the resource exists in Pangolin and recreates if deleted
-func (r *HTTPRouteReconciler) verifyOrRecreateResourceForHostname(ctx context.Context, route *gatewayv1.HTTPRoute, gateway *gatewayv1.Gateway, resourceID, hostname string, idx int, log logr.Logger) error {
-	// Try to get existing targets to verify resource exists
-	_, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
-	if err != nil {
-		// Resource likely doesn't exist, recreate it
-		log.Info("Resource not found in Pangolin, recreating", "resourceID", resourceID, "hostname", hostname, "index", idx)
-		resourceName := fmt.Sprintf("%s-%s-%d", route.Namespace, route.Name, idx)
-		newResourceID, createErr := r.createPangolinResourceForHostname(ctx, route, gateway, hostname, resourceName, log)
-		if createErr != nil {
-			return fmt.Errorf("failed to recreate resource: %w", createErr)
-		}
-
-		// Update label with new resource ID
-		resourceLabelKey := fmt.Sprintf("%s-%d", ResourceIDLabel, idx)
-		route.Labels[resourceLabelKey] = newResourceID
-		if updateErr := r.Update(ctx, route); updateErr != nil {
-			return fmt.Errorf("failed to update HTTPRoute with new resource ID: %w", updateErr)
-		}
-
-		log.Info("Successfully recreated resource", "oldResourceID", resourceID, "newResourceID", newResourceID)
-	}
-
-	return nil
-}
-
-// findExistingResourceBySubdomain checks if a resource with the given subdomain already exists
-// Since we now name resources by full hostname, search by name field
-func (r *HTTPRouteReconciler) findExistingResourceBySubdomain(ctx context.Context, hostname string, log logr.Logger) (string, error) {
-	// List all existing resources
+// findExistingResourceBySubdomainAPI checks if a resource with the given hostname already exists
+// by calling the Pangolin API. Used during deletion when no cached map is available.
+func (r *HTTPRouteReconciler) findExistingResourceBySubdomainAPI(ctx context.Context, hostname string, log logr.Logger) (string, error) {
 	resources, err := r.PangolinClient.ListResources(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to list resources: %w", err)
 	}
 
-	// Find resource with matching name (we use hostname as resource name)
 	for _, resource := range resources {
 		if resName, ok := resource["name"].(string); ok {
 			if resName == hostname {
-				// Found matching resource
 				resourceID := fmt.Sprintf("%v", resource["resourceId"])
 				log.V(1).Info("Found existing resource with matching hostname", "resourceID", resourceID, "hostname", hostname)
 				return resourceID, nil
@@ -604,46 +608,20 @@ func (r *HTTPRouteReconciler) findExistingResourceBySubdomain(ctx context.Contex
 		}
 	}
 
-	// No existing resource found
 	return "", nil
 }
 
 // createPangolinResourceForHostname creates a new resource in Pangolin for a specific hostname
-func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Context, route *gatewayv1.HTTPRoute, gateway *gatewayv1.Gateway, hostname, resourceName string, log logr.Logger) (string, error) {
-	// Get organization domains
-	domains, err := r.PangolinClient.ListDomains(ctx)
+func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Context, route *gatewayv1.HTTPRoute, gateway *gatewayv1.Gateway, hostname, resourceName string, domains []map[string]interface{}, log logr.Logger) (string, error) {
+	// Extract subdomain by removing domain suffix using the cached domain list
+	subdomain, domainID, err := extractSubdomainFromDomains(hostname, domains)
 	if err != nil {
-		return "", fmt.Errorf("failed to list organization domains: %w", err)
-	}
-
-	// Extract subdomain by removing domain suffix
-	subdomain := hostname
-	domainID := "domain1" // Default fallback
-
-	// Match hostname against organization domains to extract subdomain
-	for _, domain := range domains {
-		domainName, ok := domain["baseDomain"].(string)
-		if !ok {
-			continue
-		}
-
-		// Check if hostname ends with this domain
-		if len(hostname) > len(domainName) && hostname[len(hostname)-len(domainName):] == domainName {
-			// Extract subdomain by removing the domain suffix
-			// Example: "test.dev0ps.me" with domain "dev0ps.me" -> "test"
-			if hostname[len(hostname)-len(domainName)-1] == '.' {
-				subdomain = hostname[:len(hostname)-len(domainName)-1]
-			} else {
-				subdomain = hostname[:len(hostname)-len(domainName)]
-			}
-
-			// Get domainID (could be "domain1", "domain2", etc.)
-			if id, ok := domain["domainId"].(string); ok {
-				domainID = id
-			}
-			log.V(1).Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainID", domainID)
-			break
-		}
+		// Fall back to using hostname as subdomain with default domainID
+		subdomain = hostname
+		domainID = "domain1"
+		log.V(1).Info("No domain match found, using hostname as subdomain", "hostname", hostname)
+	} else {
+		log.V(1).Info("Matched hostname to domain", "hostname", hostname, "subdomain", subdomain, "domainID", domainID)
 	}
 
 	// Create resource via Integration API
@@ -725,7 +703,7 @@ func (r *HTTPRouteReconciler) extractHeadersFromRoute(route *gatewayv1.HTTPRoute
 							"name":  string(header.Name),
 							"value": header.Value,
 						})
-						log.Info("Found header to add", "name", header.Name, "value", header.Value)
+						log.V(1).Info("Found header to add", "name", header.Name)
 					}
 				}
 			}
@@ -734,8 +712,6 @@ func (r *HTTPRouteReconciler) extractHeadersFromRoute(route *gatewayv1.HTTPRoute
 
 	return headers
 }
-
-// reconcileTargets creates or updates backend targets in Pangolin
 
 // updateRouteStatus updates the HTTPRoute status with conflict retry.
 func (r *HTTPRouteReconciler) updateRouteStatus(ctx context.Context, route *gatewayv1.HTTPRoute, accepted bool, reason, message string) {

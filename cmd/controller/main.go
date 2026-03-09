@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
-	controller2 "github.com/dxas90/pangolin-gateway-controller/pkg/controller"
+	pgctrl "github.com/dxas90/pangolin-gateway-controller/pkg/controller"
 	_ "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 
@@ -64,7 +64,6 @@ func main() {
 	setupLog.Info("Starting Pangolin Gateway Controller",
 		"version", "v0.1.0",
 		"gatewayClass", cfg.Controller.GatewayClassName,
-		"pangolinOrgID", cfg.Pangolin.OrgID,
 	)
 
 	// Create Pangolin client
@@ -99,13 +98,13 @@ func main() {
 	}
 
 	// Setup field indexes for efficient querying (O(1) lookups instead of O(n) scans)
-	if err := controller2.SetupIndexes(mgr); err != nil {
+	if err := pgctrl.SetupIndexes(mgr); err != nil {
 		setupLog.Error(err, "Failed to setup field indexes")
 		os.Exit(1)
 	}
 
 	// Setup Gateway controller
-	if err = (&controller2.GatewayReconciler{
+	if err = (&pgctrl.GatewayReconciler{
 		Client:          mgr.GetClient(),
 		Log:             ctrl.Log.WithName("controllers").WithName("Gateway"),
 		Scheme:          mgr.GetScheme(),
@@ -119,7 +118,7 @@ func main() {
 	}
 
 	// Setup GatewayClass controller
-	if err = (&controller2.GatewayClassReconciler{
+	if err = (&pgctrl.GatewayClassReconciler{
 		Client:         mgr.GetClient(),
 		Log:            ctrl.Log.WithName("controllers").WithName("GatewayClass"),
 		Scheme:         mgr.GetScheme(),
@@ -132,7 +131,7 @@ func main() {
 	}
 
 	// Setup HTTPRoute controller
-	if err = (&controller2.HTTPRouteReconciler{
+	if err = (&pgctrl.HTTPRouteReconciler{
 		Client:         mgr.GetClient(),
 		Log:            ctrl.Log.WithName("controllers").WithName("HTTPRoute"),
 		Scheme:         mgr.GetScheme(),
@@ -145,7 +144,7 @@ func main() {
 	}
 
 	// Setup GRPCRoute controller for TCP/UDP services
-	if err = (&controller2.GRPCRouteReconciler{
+	if err = (&pgctrl.GRPCRouteReconciler{
 		Client:         mgr.GetClient(),
 		Log:            ctrl.Log.WithName("controllers").WithName("GRPCRoute"),
 		Scheme:         mgr.GetScheme(),
@@ -158,7 +157,7 @@ func main() {
 	}
 
 	// Setup Newt controller to deploy newt instances for Gateways
-	if err = (&controller2.NewtReconciler{
+	if err = (&pgctrl.NewtReconciler{
 		Client:          mgr.GetClient(),
 		Log:             ctrl.Log.WithName("controllers").WithName("Newt"),
 		Scheme:          mgr.GetScheme(),
@@ -166,6 +165,7 @@ func main() {
 		PangolinBaseURL: cfg.Pangolin.BaseURL,
 		NewtEndpoint:    cfg.Controller.NewtEndpoint,
 		NewtImage:       cfg.Controller.NewtImage,
+		ControllerClass: cfg.Controller.GatewayClassName,
 		Config:          &cfg.Controller,
 		Recorder:        mgr.GetEventRecorderFor("newt-controller"),
 	}).SetupWithManager(mgr); err != nil {

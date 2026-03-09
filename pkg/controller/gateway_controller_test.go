@@ -180,13 +180,13 @@ func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway() {
 	err := s.Client().Create(s.Context(), gateway)
 	s.Require().NoError(err)
 
-	// Mock expects verification call
-	existingSite := pangolin.Site{
+	// Mock expects verification call using GetSite (Fix H-004)
+	existingSite := &pangolin.Site{
 		ID:     12345,
 		Name:   "pgc-" + testutil.TestGatewayName,
 		Online: true,
 	}
-	s.mockPangolin.On("ListSites", testutil.MockAnything).Return([]pangolin.Site{existingSite}, nil).Once()
+	s.mockPangolin.On("GetSite", testutil.MockAnything, "12345").Return(existingSite, nil).Once()
 
 	// Reconcile
 	req := reconcile.Request{
@@ -198,7 +198,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().Equal(5*time.Minute, result.RequeueAfter, "Should requeue after 5 minutes for verification")
+	s.Require().Equal(15*time.Minute, result.RequeueAfter, "Should requeue after 15 minutes for verification")
 }
 
 // TestReconcile_DeleteGateway tests Gateway deletion with finalizer.

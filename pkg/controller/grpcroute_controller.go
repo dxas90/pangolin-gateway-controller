@@ -25,6 +25,32 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+// sanitizeGRPCEventMessage truncates error messages for Kubernetes events to avoid
+// leaking large API response bodies into event records.
+func sanitizeGRPCEventMessage(err error) string {
+	msg := err.Error()
+	if len(msg) > 200 {
+		return msg[:200] + "..."
+	}
+	return msg
+}
+
+// numericToStringGRPC converts numeric interface values to string for comparison
+func numericToStringGRPC(v interface{}) string {
+	switch n := v.(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", n)
+	case int:
+		return strconv.Itoa(n)
+	case int64:
+		return strconv.FormatInt(n, 10)
+	case string:
+		return n
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // GRPCRouteReconciler reconciles GRPCRoute resources for TCP/UDP services
 type GRPCRouteReconciler struct {
 	client.Client
@@ -150,18 +176,18 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 		if err != nil {
 			log.Error(err, "Failed to create Pangolin resource")
 			r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
-			r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource: %s", err.Error())
+			r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource: %s", sanitizeGRPCEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 		resourceID = newResourceID
 
 		// Update route labels with resource ID
-		labelPatch := route.DeepCopy()
+		original := route.DeepCopy()
 		if route.Labels == nil {
 			route.Labels = make(map[string]string)
 		}
 		route.Labels[ResourceIDLabel] = resourceID
-		if err := r.Patch(ctx, route, client.MergeFrom(labelPatch)); err != nil {
+		if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to update GRPCRoute with resource ID")
 			return ctrl.Result{}, err
 		}
@@ -180,7 +206,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 	if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
 		log.Error(err, "Failed to reconcile targets")
 		r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
-		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", err.Error())
+		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", sanitizeGRPCEventMessage(err))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
@@ -204,13 +230,14 @@ func (r *GRPCRouteReconciler) verifyOrRecreateResource(ctx context.Context, rout
 		if createErr != nil {
 			return fmt.Errorf("failed to recreate resource: %w", createErr)
 		}
-		// Update route labels with new resource ID
+		// Update route labels with new resource ID using Patch to avoid overwriting
+		original := route.DeepCopy()
 		if route.Labels == nil {
 			route.Labels = make(map[string]string)
 		}
 		route.Labels[ResourceIDLabel] = newResourceID
-		if err := r.Update(ctx, route); err != nil {
-			return fmt.Errorf("failed to update GRPCRoute with new resource ID: %w", err)
+		if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
+			return fmt.Errorf("failed to patch route with new resource ID: %w", err)
 		}
 		log.Info("Recreated resource after deletion", "oldResourceID", resourceID, "newResourceID", newResourceID)
 	}
@@ -288,8 +315,8 @@ func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 		targetExists := false
 		for _, target := range existingTargets {
 			if fmt.Sprintf("%v", target["ip"]) == clusterIP &&
-				fmt.Sprintf("%v", target["port"]) == fmt.Sprintf("%d", port) &&
-				fmt.Sprintf("%v", target["siteId"]) == fmt.Sprintf("%d", siteIDInt) {
+				numericToStringGRPC(target["port"]) == strconv.Itoa(port) &&
+				numericToStringGRPC(target["siteId"]) == strconv.Itoa(siteIDInt) {
 				targetExists = true
 				log.Info("Target already exists, skipping", "ip", clusterIP, "port", port, "targetId", target["targetId"])
 				break
@@ -345,29 +372,11 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 	if len(route.Spec.Hostnames) > 0 {
 		hostname := string(route.Spec.Hostnames[0])
 
-		// Match hostname against organization domains
-		for _, domain := range domains {
-			domainName, ok := domain["name"].(string)
-			if !ok {
-				continue
-			}
-
-			// Check if hostname ends with this domain
-			if len(hostname) > len(domainName) && hostname[len(hostname)-len(domainName):] == domainName {
-				// Extract subdomain
-				if hostname[len(hostname)-len(domainName)-1] == '.' {
-					subdomain = hostname[:len(hostname)-len(domainName)-1]
-				} else {
-					subdomain = hostname[:len(hostname)-len(domainName)]
-				}
-
-				// Get domainID
-				if id, ok := domain["domainId"].(string); ok {
-					domainID = id
-				}
-				log.Info("Matched hostname to domain", "hostname", hostname, "domain", domainName, "subdomain", subdomain, "domainID", domainID)
-				break
-			}
+		// Use the shared extractSubdomainFromDomains helper with baseDomain field
+		if sub, id, err := extractSubdomainFromDomains(hostname, domains); err == nil {
+			subdomain = sub
+			domainID = id
+			log.Info("Matched hostname to domain", "hostname", hostname, "subdomain", subdomain, "domainID", domainID)
 		}
 	}
 

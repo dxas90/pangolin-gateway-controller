@@ -24,6 +24,10 @@ const (
 	// DefaultTimeout is the default HTTP client timeout
 	DefaultTimeout = 30 * time.Second
 
+	// maxResponseBodySize limits how many bytes we read from API responses
+	// to prevent memory exhaustion from unexpectedly large payloads.
+	maxResponseBodySize = 10 * 1024 * 1024 // 10 MB
+
 	// listPageSize is the number of items to request per page when listing
 	// sites or resources. Pangolin 1.16.0+ changed the default from 1000→20;
 	// we request 1000 at a time to minimise round-trips while still being
@@ -64,6 +68,10 @@ func NewClient(apiKey, orgID string) *Client {
 		OrgID:   orgID,
 		HTTPClient: &http.Client{
 			Timeout: DefaultTimeout,
+			Transport: &http.Transport{
+				MaxIdleConnsPerHost: 25,
+				IdleConnTimeout:     90 * time.Second,
+			},
 		},
 		Breaker: NewCircuitBreaker(5, 30*time.Second),
 	}
@@ -199,17 +207,18 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	// Record metrics
 	duration := time.Since(startTime).Seconds()
 	statusCode := strconv.Itoa(resp.StatusCode)
+	normalizedPath := normalizePath(path)
 
-	metrics.PangolinAPIRequests.WithLabelValues(path, method, statusCode).Inc()
-	metrics.PangolinAPILatency.WithLabelValues(path, method).Observe(duration)
+	metrics.PangolinAPIRequests.WithLabelValues(normalizedPath, method, statusCode).Inc()
+	metrics.PangolinAPILatency.WithLabelValues(normalizedPath, method).Observe(duration)
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
-		metrics.PangolinAPIErrors.WithLabelValues(path, method, statusCode).Inc()
+		metrics.PangolinAPIErrors.WithLabelValues(normalizedPath, method, statusCode).Inc()
 		apiErr := &PangolinAPIError{
 			StatusCode: resp.StatusCode,
 			Endpoint:   path,
@@ -233,67 +242,6 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		c.Breaker.RecordSuccess()
 	}
 	return respBody, nil
-}
-
-// CreateSiteResource creates a new site resource
-func (c *Client) CreateSiteResource(ctx context.Context, resource *SiteResource) (*SiteResource, error) {
-	path := fmt.Sprintf("/org/%s/site-resource", c.OrgID)
-	respBody, err := c.doRequest(ctx, http.MethodPut, path, resource)
-	if err != nil {
-		return nil, err
-	}
-
-	// API returns {"data": {...}}
-	var response struct {
-		Data SiteResource `json:"data"`
-	}
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &response.Data, nil
-}
-
-// GetSiteResource retrieves a site resource by ID
-func (c *Client) GetSiteResource(ctx context.Context, resourceID string) (*SiteResource, error) {
-	path := fmt.Sprintf("/site-resource/%s", resourceID)
-	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// API returns {"data": {...}}
-	var response struct {
-		Data SiteResource `json:"data"`
-	}
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &response.Data, nil
-}
-
-// UpdateSiteResource updates an existing site resource
-func (c *Client) UpdateSiteResource(ctx context.Context, resourceID string, resource *SiteResource) (*SiteResource, error) {
-	path := fmt.Sprintf("/site-resource/%s", resourceID)
-	respBody, err := c.doRequest(ctx, http.MethodPost, path, resource)
-	if err != nil {
-		return nil, err
-	}
-
-	var result SiteResource
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// DeleteSiteResource deletes a site resource
-func (c *Client) DeleteSiteResource(ctx context.Context, resourceID string) error {
-	path := fmt.Sprintf("/site-resource/%s", resourceID)
-	_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
-	return err
 }
 
 // DeleteResource deletes a resource via Integration API
@@ -739,7 +687,7 @@ func (c *Client) GetServerVersion(ctx context.Context, newtEndpoint, newtID, new
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 	if err != nil {
 		return "", fmt.Errorf("failed to read token response: %w", err)
 	}
@@ -758,4 +706,45 @@ func (c *Client) GetServerVersion(ctx context.Context, newtEndpoint, newtID, new
 	}
 
 	return tokenResp.Data.ServerVersion, nil
+}
+
+// normalizePath strips query strings and replaces numeric/UUID-like path
+// segments with {id} to produce stable metric label values.
+// Example: /org/home/sites/12345/resources → /org/{id}/sites/{id}/resources
+func normalizePath(path string) string {
+	// Strip query string
+	if idx := strings.Index(path, "?"); idx >= 0 {
+		path = path[:idx]
+	}
+	// Replace numeric/UUID segments with {id}
+	segments := strings.Split(path, "/")
+	for i, seg := range segments {
+		if isIDSegment(seg) {
+			segments[i] = "{id}"
+		}
+	}
+	return strings.Join(segments, "/")
+}
+
+func isIDSegment(s string) bool {
+	if s == "" {
+		return false
+	}
+	// Pure numeric
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			// Could be UUID - check length and hex chars
+			return len(s) >= 8 && isHexString(s)
+		}
+	}
+	return true
+}
+
+func isHexString(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == '-') {
+			return false
+		}
+	}
+	return true
 }

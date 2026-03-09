@@ -42,6 +42,15 @@ func (m *MockPangolinClient) ListSites(ctx context.Context) ([]pangolin.Site, er
 	return args.Get(0).([]pangolin.Site), args.Error(1)
 }
 
+// GetSite mocks the GetSite method.
+func (m *MockPangolinClient) GetSite(ctx context.Context, siteID string) (*pangolin.Site, error) {
+	args := m.Called(ctx, siteID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*pangolin.Site), args.Error(1)
+}
+
 // DeleteSite mocks the DeleteSite method.
 func (m *MockPangolinClient) DeleteSite(ctx context.Context, siteID int) error {
 	args := m.Called(ctx, siteID)

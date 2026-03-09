@@ -58,6 +58,7 @@ type NewtReconciler struct {
 	PangolinBaseURL string
 	NewtEndpoint    string
 	NewtImage       string
+	ControllerClass string
 	Config          *config.ControllerConfig
 	Recorder        record.EventRecorder
 }
@@ -82,7 +83,7 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// Skip if not our gateway class
-	if gateway.Spec.GatewayClassName != GatewayClassName {
+	if string(gateway.Spec.GatewayClassName) != r.ControllerClass {
 		return ctrl.Result{}, nil
 	}
 
@@ -240,9 +241,12 @@ func (r *NewtReconciler) buildNewtDeployment(gateway *gatewayv1.Gateway, site *p
 							Image:           r.NewtImage,
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							SecurityContext: &corev1.SecurityContext{
-								RunAsUser:                ptr(int64(0)),
-								AllowPrivilegeEscalation: ptr(true),
+								AllowPrivilegeEscalation: ptr(false),
 								ReadOnlyRootFilesystem:   ptr(false),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+									Add:  []corev1.Capability{"NET_ADMIN"},
+								},
 							},
 							Env: []corev1.EnvVar{
 								{

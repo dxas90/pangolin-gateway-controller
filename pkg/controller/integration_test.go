@@ -79,11 +79,12 @@ func (s *IntegrationTestSuite) SetupTest() {
 	}
 
 	s.newtReconciler = &controller.NewtReconciler{
-		Client:    s.Client(),
-		Log:       ctrl.Log.WithName("test").WithName("Newt"),
-		Scheme:    s.Client().Scheme(),
-		Config:    cfg,
-		NewtImage: controller.NewtImage,
+		Client:          s.Client(),
+		Log:             ctrl.Log.WithName("test").WithName("Newt"),
+		Scheme:          s.Client().Scheme(),
+		Config:          cfg,
+		NewtImage:       controller.NewtImage,
+		ControllerClass: testutil.TestGatewayClass,
 	}
 
 	s.httpRouteReconciler = &controller.HTTPRouteReconciler{

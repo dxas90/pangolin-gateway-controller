@@ -163,7 +163,7 @@ func (c *Config) ApplyDefaults() {
 	}
 
 	if c.Controller.MaxConcurrentReconciles <= 0 {
-		c.Controller.MaxConcurrentReconciles = 1
+		c.Controller.MaxConcurrentReconciles = 3
 	}
 
 	if c.Controller.RateLimiterBaseDelay <= 0 {

@@ -1,6 +1,7 @@
 package pangolin
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -65,12 +66,12 @@ func (e *PangolinAPIError) IsRetryable() bool {
 
 // IsPangolinAPIError checks if an error is a PangolinAPIError
 func IsPangolinAPIError(err error) bool {
-	_, ok := err.(*PangolinAPIError)
-	return ok
+	var apiErr *PangolinAPIError
+	return errors.As(err, &apiErr)
 }
 
 // AsPangolinAPIError attempts to cast an error to PangolinAPIError
 func AsPangolinAPIError(err error) (*PangolinAPIError, bool) {
-	apiErr, ok := err.(*PangolinAPIError)
-	return apiErr, ok
+	var apiErr *PangolinAPIError
+	return apiErr, errors.As(err, &apiErr)
 }

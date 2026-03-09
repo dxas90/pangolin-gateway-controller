@@ -102,8 +102,11 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// Track Gateway count
-	metrics.GatewayTotal.WithLabelValues(gateway.Namespace).Set(1)
+	// Count actual gateways in namespace for accurate metric
+	var gatewayList gatewayv1.GatewayList
+	if listErr := r.List(ctx, &gatewayList, client.InNamespace(gateway.Namespace)); listErr == nil {
+		metrics.GatewayTotal.WithLabelValues(gateway.Namespace).Set(float64(len(gatewayList.Items)))
+	}
 
 	// Handle deletion
 	if !gateway.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -242,8 +245,8 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 	r.updateGatewayStatus(ctx, gateway, gatewayv1.GatewayConditionAccepted, true, "Accepted", "Gateway has been accepted")
 
 	log.Info("Successfully reconciled Gateway", "siteID", siteID)
-	// Requeue after 5 minutes to periodically verify site still exists
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	// Requeue after 15 minutes to periodically verify site still exists
+	return ctrl.Result{RequeueAfter: 15 * time.Minute}, nil
 }
 
 // ensureSite ensures a Pangolin newt-type site exists for the Gateway.
@@ -299,33 +302,30 @@ func (r *GatewayReconciler) ensureSite(ctx context.Context, gateway *gatewayv1.G
 	createdSite.NewtID = site.NewtID
 	createdSite.Secret = site.Secret
 
-	log.Info("Created new Pangolin site", "siteID", createdSite.ID, "siteName", siteName, "newtID", createdSite.NewtID)
+	log.V(1).Info("Created new Pangolin site", "siteID", createdSite.ID, "siteName", siteName, "newtID", createdSite.NewtID)
 	return createdSite, nil
 }
 
 // verifyOrRecreateSite checks if the site exists in Pangolin and recreates if deleted
 func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *gatewayv1.Gateway, siteIDStr string, log logr.Logger) error {
-	siteID, err := strconv.Atoi(siteIDStr)
+	site, err := r.PangolinClient.GetSite(ctx, siteIDStr)
 	if err != nil {
-		return fmt.Errorf("invalid site ID %s: %w", siteIDStr, err)
-	}
-
-	// Try to list sites and verify this site exists
-	sites, err := r.PangolinClient.ListSites(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list sites: %w", err)
-	}
-
-	// Check if site exists
-	for _, site := range sites {
-		if site.ID == siteID {
-			// Site exists, all good
-			return nil
+		// Check if not found
+		if pangolin.IsPangolinAPIError(err) {
+			if apiErr, ok := pangolin.AsPangolinAPIError(err); ok && apiErr.StatusCode == 404 {
+				// Site not found, recreate
+				log.Info("Site not found in Pangolin, will recreate", "siteID", siteIDStr)
+				return r.recreateSite(ctx, gateway, siteIDStr, log)
+			}
 		}
+		return fmt.Errorf("failed to get site %s: %w", siteIDStr, err)
 	}
+	_ = site // site exists, no action needed
+	return nil
+}
 
-	// Site doesn't exist, recreate it
-	log.Info("Site not found in Pangolin, recreating", "siteID", siteID)
+// recreateSite creates a new Pangolin site for a Gateway after the original was deleted.
+func (r *GatewayReconciler) recreateSite(ctx context.Context, gateway *gatewayv1.Gateway, oldSiteIDStr string, log logr.Logger) error {
 	newSite, err := r.ensureSite(ctx, gateway, log)
 	if err != nil {
 		return fmt.Errorf("failed to recreate site: %w", err)
@@ -347,7 +347,7 @@ func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *g
 		return fmt.Errorf("failed to update Gateway with new site ID: %w", err)
 	}
 
-	log.Info("Recreated site after deletion", "oldSiteID", siteID, "newSiteID", newSite.ID)
+	log.Info("Recreated site after deletion", "oldSiteID", oldSiteIDStr, "newSiteID", newSite.ID)
 	return nil
 }
 
@@ -374,10 +374,8 @@ func (r *GatewayReconciler) createNewtCredentialsSecret(ctx context.Context, gat
 		},
 	}
 
-	if r.Scheme != nil {
-		if err := controllerutil.SetControllerReference(gateway, secret, r.Scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference on secret: %w", err)
-		}
+	if err := controllerutil.SetControllerReference(gateway, secret, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner reference on secret: %w", err)
 	}
 
 	if err := r.Create(ctx, secret); err != nil {
@@ -435,6 +433,9 @@ func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *ga
 
 // SetupWithManager registers the controller with the manager to watch Gateway resources
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Scheme == nil {
+		return fmt.Errorf("scheme is required for GatewayReconciler")
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-site").
 		For(&gatewayv1.Gateway{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).

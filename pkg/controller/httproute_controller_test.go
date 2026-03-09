@@ -223,7 +223,7 @@ func (s *HTTPRouteControllerTestSuite) TestReconcile_DeleteHTTPRoute() {
 	}
 
 	s.mockPangolin.On("ListResources", testutil.MockAnything).Return(resources, nil).Once()
-	s.mockPangolin.On("ListTargetsRaw", testutil.MockAnything, "resource-123").Return(targets, nil).Twice()
+	s.mockPangolin.On("ListTargetsRaw", testutil.MockAnything, "resource-123").Return(targets, nil).Once()
 	s.mockPangolin.On("DeleteTarget", testutil.MockAnything, "456").Return(nil).Once()
 	s.mockPangolin.On("DeleteResource", testutil.MockAnything, "resource-123").Return(nil).Maybe()
 

@@ -11,12 +11,6 @@ import (
 const (
 	// GatewayClassNameField is the field index for Gateway.Spec.GatewayClassName
 	GatewayClassNameField = ".spec.gatewayClassName"
-
-	// HTTPRouteParentRefsField is the field index for HTTPRoute parent references
-	HTTPRouteParentRefsField = ".spec.parentRefs"
-
-	// GRPCRouteParentRefsField is the field index for GRPCRoute parent references
-	GRPCRouteParentRefsField = ".spec.parentRefs"
 )
 
 // SetupIndexes sets up field indexes for efficient querying.
@@ -37,45 +31,6 @@ func SetupIndexes(mgr manager.Manager) error {
 		func(obj client.Object) []string {
 			gateway := obj.(*gatewayv1.Gateway)
 			return []string{string(gateway.Spec.GatewayClassName)}
-		},
-	); err != nil {
-		return err
-	}
-
-	// Index HTTPRoutes by parent Gateway references
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&gatewayv1.HTTPRoute{},
-		HTTPRouteParentRefsField,
-		func(obj client.Object) []string {
-			route := obj.(*gatewayv1.HTTPRoute)
-			var parentNames []string
-			for _, parentRef := range route.Spec.ParentRefs {
-				// Index by Gateway name (assuming same namespace)
-				if parentRef.Kind != nil && *parentRef.Kind == "Gateway" {
-					parentNames = append(parentNames, string(parentRef.Name))
-				}
-			}
-			return parentNames
-		},
-	); err != nil {
-		return err
-	}
-
-	// Index GRPCRoutes by parent Gateway references
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&gatewayv1.GRPCRoute{},
-		GRPCRouteParentRefsField,
-		func(obj client.Object) []string {
-			route := obj.(*gatewayv1.GRPCRoute)
-			var parentNames []string
-			for _, parentRef := range route.Spec.ParentRefs {
-				if parentRef.Kind != nil && *parentRef.Kind == "Gateway" {
-					parentNames = append(parentNames, string(parentRef.Name))
-				}
-			}
-			return parentNames
 		},
 	); err != nil {
 		return err
