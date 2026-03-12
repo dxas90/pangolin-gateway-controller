@@ -1,10 +1,14 @@
 # Image URL to use all building/pushing image targets
 IMAGE_TAG_BASE ?= pangolin-gateway-controller
-VERSION ?= latest
+VERSION ?= 0.1.0
 IMG ?= $(IMAGE_TAG_BASE):$(VERSION)
 
 # Pin toolchain to match go.mod (avoids golang.org/x/net Go 1.26 stdlib incompatibility)
 export GOTOOLCHAIN=go1.25.7
+
+# Build-time version injection
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION_LDFLAGS := -X main.version=$(VERSION) -X main.buildDate=$(BUILD_DATE)
 
 # Go settings
 ENVTEST_K8S_VERSION ?= 1.31.x
@@ -80,11 +84,11 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 
 .PHONY: build
 build: fmt vet ## Build controller binary.
-	go build -o bin/controller cmd/controller/main.go
+	go build -ldflags "$(VERSION_LDFLAGS)" -o bin/controller cmd/controller/main.go
 
 .PHONY: run
 run: fmt vet ## Run controller from your host.
-	go run cmd/controller/main.go --env-config
+	go run -ldflags "$(VERSION_LDFLAGS)" cmd/controller/main.go --env-config
 
 .PHONY: docker-build
 docker-build: ## Build docker image.

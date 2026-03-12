@@ -1,0 +1,102 @@
+suite: test service monitor
+templates:
+  - servicemonitor.yaml
+tests:
+  - it: should not create ServiceMonitor when disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create ServiceMonitor when enabled
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: apiVersion
+          value: monitoring.coreos.com/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-pangolin-gateway-controller
+      - equal:
+          path: metadata.namespace
+          value: pangolin-system
+
+  - it: should have correct selector matchLabels
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: pangolin-gateway-controller
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: should have endpoint with port metrics
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+
+  - it: should use default interval of 30s
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+
+  - it: should use default scrapeTimeout of 10s
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - equal:
+          path: spec.endpoints[0].scrapeTimeout
+          value: 10s
+
+  - it: should allow custom interval and scrapeTimeout
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.interval: 60s
+      serviceMonitor.scrapeTimeout: 15s
+    asserts:
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 60s
+      - equal:
+          path: spec.endpoints[0].scrapeTimeout
+          value: 15s
+
+  - it: should include custom labels when provided
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.labels:
+        prometheus: kube-prometheus
+        release: monitoring
+    asserts:
+      - equal:
+          path: metadata.labels.prometheus
+          value: kube-prometheus
+      - equal:
+          path: metadata.labels.release
+          value: monitoring
+
+  - it: should include standard labels
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - exists:
+          path: metadata.labels["helm.sh/chart"]
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: pangolin-gateway-controller
+      - equal:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+          value: Helm

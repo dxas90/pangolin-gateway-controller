@@ -20,6 +20,7 @@ go.work
 # Build artifacts
 main
 learn-go
+/controller
 dist/
 build/
 bin/

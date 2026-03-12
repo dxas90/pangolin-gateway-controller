@@ -265,6 +265,118 @@ func (s *GatewayControllerTestSuite) TestReconcile_WrongGatewayClass() {
 	s.mockPangolin.AssertExpectations(s.T())
 }
 
+// TestReconcile_NotFound tests reconciling a non-existent Gateway.
+func (s *GatewayControllerTestSuite) TestReconcile_NotFound() {
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "nonexistent-gateway",
+			Namespace: s.testNamespace,
+		},
+	}
+
+	result, err := s.reconciler.Reconcile(s.Context(), req)
+	s.Require().NoError(err)
+	s.Require().False(result.Requeue)
+}
+
+// TestReconcile_DeleteGateway_NoSiteID tests Gateway deletion when no site ID is labeled.
+func (s *GatewayControllerTestSuite) TestReconcile_DeleteGateway_NoSiteID() {
+	gateway := testutil.NewTestGateway("gw-no-site", s.testNamespace)
+	gateway.Finalizers = []string{controller.FinalizerName}
+	// No SiteIDLabel set
+
+	err := s.Client().Create(s.Context(), gateway)
+	s.Require().NoError(err)
+
+	// Delete the Gateway
+	err = s.Client().Delete(s.Context(), gateway)
+	s.Require().NoError(err)
+
+	// Reconcile - should skip Pangolin cleanup since no site ID
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "gw-no-site",
+			Namespace: s.testNamespace,
+		},
+	}
+
+	result, err := s.reconciler.Reconcile(s.Context(), req)
+	s.Require().NoError(err)
+	s.Require().False(result.Requeue)
+
+	// Gateway should be deleted (finalizer removed without Pangolin call)
+	s.Eventually(func() bool {
+		fresh := &gatewayv1.Gateway{}
+		err := s.Client().Get(s.Context(), client.ObjectKeyFromObject(gateway), fresh)
+		return err != nil
+	}, "Gateway should be deleted")
+}
+
+// TestReconcile_ExistingGateway_SiteDeleted tests site recreation when GetSite returns 404.
+func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway_SiteDeleted() {
+	gateway := testutil.NewTestGateway("gw-recreate", s.testNamespace)
+	gateway.Labels = map[string]string{
+		controller.SiteIDLabel: "99999",
+	}
+
+	err := s.Client().Create(s.Context(), gateway)
+	s.Require().NoError(err)
+
+	// GetSite returns 404 - site was deleted externally
+	s.mockPangolin.On("GetSite", testutil.MockAnything, "99999").Return(nil, &pangolin.PangolinAPIError{
+		StatusCode: 404,
+		Method:     "GET",
+		Endpoint:   "/site/99999",
+		Message:    "not found",
+	}).Once()
+
+	// recreateSite calls ensureSite, which calls ListSites, PickSiteDefaults, CreateSite
+	siteDefaults := &pangolin.SiteDefaults{
+		ExitNodeID:    1,
+		Subnet:        "10.0.1.0/24",
+		ClientAddress: "10.0.1.1",
+		NewtID:        "newt-new",
+		NewtSecret:    "secret-new",
+		PublicKey:      "pubkey",
+		Endpoint:      "https://pangolin.example.com",
+		ListenPort:    51820,
+	}
+	newSite := &pangolin.Site{
+		ID:         77777,
+		Name:       "pgc-gw-recreate",
+		Type:       "newt",
+		Subnet:     siteDefaults.Subnet,
+		ExitNodeID: siteDefaults.ExitNodeID,
+	}
+
+	s.mockPangolin.On("ListSites", testutil.MockAnything).Return([]pangolin.Site{}, nil).Once()
+	s.mockPangolin.On("PickSiteDefaults", testutil.MockAnything).Return(siteDefaults, nil).Once()
+	s.mockPangolin.On("CreateSite", testutil.MockAnything, testutil.MockAnything).Return(newSite, nil).Once()
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "gw-recreate",
+			Namespace: s.testNamespace,
+		},
+	}
+
+	result, err := s.reconciler.Reconcile(s.Context(), req)
+	s.Require().NoError(err)
+
+	// Should requeue for periodic verification
+	s.Require().Equal(15*time.Minute, result.RequeueAfter)
+
+	// Verify Gateway labels were updated with new site ID
+	s.Eventually(func() bool {
+		fresh := &gatewayv1.Gateway{}
+		err := s.Client().Get(s.Context(), client.ObjectKeyFromObject(gateway), fresh)
+		if err != nil {
+			return false
+		}
+		return fresh.Labels[controller.SiteIDLabel] == "77777"
+	}, "Gateway should have new site ID")
+}
+
 // TestSuite runs the test suite.
 func TestGatewayControllerSuite(t *testing.T) {
 	suite.Run(t, new(GatewayControllerTestSuite))

@@ -25,32 +25,6 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-// sanitizeGRPCEventMessage truncates error messages for Kubernetes events to avoid
-// leaking large API response bodies into event records.
-func sanitizeGRPCEventMessage(err error) string {
-	msg := err.Error()
-	if len(msg) > 200 {
-		return msg[:200] + "..."
-	}
-	return msg
-}
-
-// numericToStringGRPC converts numeric interface values to string for comparison
-func numericToStringGRPC(v interface{}) string {
-	switch n := v.(type) {
-	case float64:
-		return fmt.Sprintf("%.0f", n)
-	case int:
-		return strconv.Itoa(n)
-	case int64:
-		return strconv.FormatInt(n, 10)
-	case string:
-		return n
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
-
 // GRPCRouteReconciler reconciles GRPCRoute resources for TCP/UDP services
 type GRPCRouteReconciler struct {
 	client.Client
@@ -176,7 +150,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 		if err != nil {
 			log.Error(err, "Failed to create Pangolin resource")
 			r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
-			r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource: %s", sanitizeGRPCEventMessage(err))
+			r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource: %s", sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 		resourceID = newResourceID
@@ -206,7 +180,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 	if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
 		log.Error(err, "Failed to reconcile targets")
 		r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
-		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", sanitizeGRPCEventMessage(err))
+		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", sanitizeEventMessage(err))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
@@ -315,8 +289,8 @@ func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 		targetExists := false
 		for _, target := range existingTargets {
 			if fmt.Sprintf("%v", target["ip"]) == clusterIP &&
-				numericToStringGRPC(target["port"]) == strconv.Itoa(port) &&
-				numericToStringGRPC(target["siteId"]) == strconv.Itoa(siteIDInt) {
+				numericToString(target["port"]) == strconv.Itoa(port) &&
+				numericToString(target["siteId"]) == strconv.Itoa(siteIDInt) {
 				targetExists = true
 				log.Info("Target already exists, skipping", "ip", clusterIP, "port", port, "targetId", target["targetId"])
 				break
@@ -404,7 +378,11 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 	}
 
 	// Extract resource ID from response
-	resourceID := fmt.Sprintf("%v", respData["resourceId"])
+	rawID := respData["resourceId"]
+	if rawID == nil {
+		return "", fmt.Errorf("no resourceId in response")
+	}
+	resourceID := fmt.Sprintf("%v", rawID)
 	if resourceID == "" {
 		return "", fmt.Errorf("no resourceId in response")
 	}

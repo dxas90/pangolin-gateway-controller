@@ -114,85 +114,37 @@ func (e *PangolinAPIError) IsRetryable() bool
 
 ---
 
-### 4. Exponential Backoff (Documented) ✅
+### 4. Exponential Backoff ✅
 
 **Problem**: Fixed 30-second requeue on all errors wastes resources and delays recovery.
 
-**Solution**: Documented approach for future implementation with TODO comment:
+**Solution**: Implemented `ratelimiter.go` with token bucket + exponential backoff rate limiter. All controllers use `buildRateLimiter()`.
 
-```go
-// TODO: Add exponential backoff rate limiter in future
-// Requires: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request]()
-// See: https://pkg.go.dev/k8s.io/client-go/util/workqueue
-```
+**Files Created**:
 
-**Note**: Full implementation requires migrating to typed workqueues (controller-runtime v0.16+). Current requeue strategy with metrics provides visibility for now.
-
-**Files Modified**:
-
-- `cmd/controller/main.go`
+- `pkg/controller/ratelimiter.go`
 
 ---
 
 ## Pending Improvements (Prioritized)
 
-### 5. Handle Multiple Backend Refs with Weights 🔄
+### 5. Handle Multiple Backend Refs with Weights ✅
 
-**Current Limitation**: Only uses first backend, ignores weights.
+**Current Status**: Fully implemented — creates one Pangolin target per backend with weight-based priority. Supports canary deployments and weighted traffic splitting.
 
-**Proposed Solution**:
+**Files Modified**:
 
-```go
-// Create one target per backend with proper weight handling
-for _, backendRef := range rule.BackendRefs {
-    weight := 100 // default
-    if backendRef.Weight != nil {
-        weight = int(*backendRef.Weight)
-    }
-
-    // Create target with weight-based priority
-    priority := calculatePriority(ruleIdx, weight)
-    createTarget(ctx, resourceID, backendRef, priority)
-}
-```
-
-**Benefits**:
-
-- Proper traffic splitting across backends
-- Canary deployments with weighted routing
-- Full Gateway API spec compliance
-
-**Estimated Effort**: 4 hours
+- `pkg/controller/httproute_targets.go`
 
 ---
 
-### 6. Circuit Breaker for Pangolin API 🔄
+### 6. Circuit Breaker for Pangolin API ✅
 
-**Current Issue**: No protection against cascading failures when Pangolin API is degraded.
+**Solution**: Custom circuit breaker in `pkg/pangolin/circuit_breaker.go`. No external dependency.
 
-**Proposed Solution**: Integration with `github.com/sony/gobreaker`
+**Files Created**:
 
-```go
-type Client struct {
-    breaker *gobreaker.CircuitBreaker
-    // ...
-}
-
-func (c *Client) doRequest(...) {
-    result, err := c.breaker.Execute(func() (interface{}, error) {
-        // existing request logic
-    })
-}
-```
-
-**Benefits**:
-
-- Prevent cascading failures
-- Faster failure detection
-- Automatic recovery attempts
-- Reduced load on degraded API
-
-**Estimated Effort**: 3 hours
+- `pkg/pangolin/circuit_breaker.go`
 
 ---
 
@@ -224,100 +176,60 @@ func (v *GatewayValidator) ValidateCreate(ctx context.Context, obj runtime.Objec
 
 ---
 
-### 8. Kubernetes Structured Events 🔄
+### 8. Kubernetes Structured Events ✅
 
-**Current Issue**: Only logs, no Kubernetes events visible in `kubectl describe`.
+**Solution**: `recorder.Eventf()` used throughout all controllers for major state transitions (site created/deleted, resource created, target created/updated, errors).
 
-**Proposed Solution**:
+**Files Modified**:
 
-```go
-r.recorder.Event(gateway, corev1.EventTypeNormal, "SiteCreated",
-    fmt.Sprintf("Created Pangolin site %d", siteID))
-```
-
-**Benefits**:
-
-- Visible in kubectl describe
-- Better integration with K8s ecosystem
-- Audit trail in cluster
-
-**Estimated Effort**: 2 hours
+- `pkg/controller/gateway_controller.go`
+- `pkg/controller/httproute_controller.go`
+- `pkg/controller/grpcroute_controller.go`
+- `pkg/controller/newt_controller.go`
 
 ---
 
-### 9. Configuration Validation 🔄
+### 9. Configuration Validation ✅
 
-**Current Issue**: Silent failures on invalid config.
+**Solution**: `Validate()` method called at startup in `config.go`. Returns errors for missing required fields.
 
-**Proposed Solution**:
+**Files Modified**:
 
-```go
-func (c *Config) Validate() error {
-    if c.Pangolin.APIKey == "" {
-        return fmt.Errorf("apiKey is required")
-    }
-    // ... more validations
-    return nil
-}
-```
-
-**Benefits**:
-
-- Fast failure at startup
-- Clear error messages
-- Prevent misconfiguration
-
-**Estimated Effort**: 2 hours
+- `pkg/config/config.go`
 
 ---
 
-### 10. Enhanced Health Checks 🔄
+### 10. Enhanced Health Checks ✅
 
-**Current Issue**: Basic ping only, no actual connectivity check.
+**Solution**: `/readyz` now calls `ListSites()` to verify actual Pangolin API connectivity. `/healthz` remains a simple ping (liveness should not depend on external services).
 
-**Proposed Solution**:
+**Files Created**:
 
-```go
-func (r *GatewayReconciler) HealthCheck(req *http.Request) error {
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
+- `pkg/controller/healthcheck.go`
 
-    _, err := r.PangolinClient.ListSites(ctx)
-    return err
-}
-```
+**Files Modified**:
 
-**Benefits**:
-
-- Actual API connectivity check
-- Better load balancer health detection
-- Prevent routing to unhealthy pods
-
-**Estimated Effort**: 2 hours
+- `cmd/controller/main.go`
 
 ---
 
-### 11. Split HTTPRoute Controller 🔄
+### 11. Split HTTPRoute Controller ✅
 
-**Current Issue**: Single 699-line file, hard to maintain.
-
-**Proposed Structure**:
+**Solution**: The 772-line file was split into 4 focused files:
 
 ```
 pkg/controller/
-  ├── httproute_controller.go        # Main reconcile logic (200 lines)
-  ├── httproute_targets.go           # Target management (200 lines)
-  ├── httproute_status.go            # Status updates (100 lines)
-  └── httproute_helpers.go           # Helper functions (200 lines)
+  ├── httproute_controller.go   # Struct + Reconcile + handleDelete + reconcileHTTPRoute
+  ├── httproute_helpers.go      # Helper functions + resource creation
+  ├── httproute_targets.go      # reconcileTargets method
+  └── httproute_status.go       # updateRouteStatus method
 ```
 
-**Benefits**:
+**Files Created**:
 
-- Better code organization
-- Easier to navigate
-- Simpler reviews
-
-**Estimated Effort**: 3 hours
+- `pkg/controller/httproute_helpers.go`
+- `pkg/controller/httproute_targets.go`
+- `pkg/controller/httproute_status.go`
 
 ---
 
@@ -379,17 +291,17 @@ pkg/controller/
 | Target Metadata | High | Medium | ✅ Done |
 | Typed Errors | High | Low | ✅ Done |
 | Metrics | High | Medium | ✅ Done |
-| Exponential Backoff | Medium | Low | ✅ Documented |
-| Multi-Backend Weights | High | Medium | Next |
-| Circuit Breaker | Medium | Low | Soon |
-| Webhooks | Medium | High | Later |
-| Events | Low | Low | Later |
-| Config Validation | Medium | Low | Soon |
-| Health Checks | Low | Low | Later |
-| Code Split | Low | Medium | Later |
-| Godoc | Low | Medium | Later |
-| Unit Tests | High | High | Critical |
-| Helm Chart | Medium | Medium | Later |
+| Exponential Backoff | Medium | Low | ✅ Done |
+| Multi-Backend Weights | High | Medium | ✅ Done |
+| Circuit Breaker | Medium | Low | ✅ Done |
+| Webhooks | Medium | High | 🔄 Later |
+| Events | Low | Low | ✅ Done |
+| Config Validation | Medium | Low | ✅ Done |
+| Health Checks | Low | Low | ✅ Done |
+| Code Split | Low | Medium | ✅ Done |
+| Godoc | Low | Medium | 🔄 Later |
+| Unit Tests | High | High | 🔄 Critical |
+| Helm Chart (PDB/NP/SM) | Medium | Medium | ✅ Done |
 
 ## Testing Recommendations
 

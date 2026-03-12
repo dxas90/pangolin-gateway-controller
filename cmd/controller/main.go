@@ -8,6 +8,7 @@ import (
 	pgctrl "github.com/dxas90/pangolin-gateway-controller/pkg/controller"
 	_ "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
+	"github.com/dxas90/pangolin-gateway-controller/pkg/webhook"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -18,6 +19,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+)
+
+// version and buildDate are injected at build time via -ldflags.
+var (
+	version   = "dev"
+	buildDate = "unknown"
 )
 
 var (
@@ -62,7 +69,8 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	setupLog.Info("Starting Pangolin Gateway Controller",
-		"version", "v0.1.0",
+		"version", version,
+		"buildDate", buildDate,
 		"gatewayClass", cfg.Controller.GatewayClassName,
 	)
 
@@ -173,13 +181,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup admission webhooks (opt-in via ENABLE_WEBHOOKS=true)
+	if os.Getenv("ENABLE_WEBHOOKS") == "true" {
+		setupLog.Info("Setting up admission webhooks")
+		if err := webhook.SetupWebhookWithManager(mgr, cfg.Controller.GatewayClassName); err != nil {
+			setupLog.Error(err, "Failed to setup webhooks")
+			os.Exit(1)
+		}
+	}
+
 	// Setup health checks
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")
 		os.Exit(1)
 	}
 
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	if err := mgr.AddReadyzCheck("readyz", pgctrl.NewPangolinReadyChecker(pangolinClient)); err != nil {
 		setupLog.Error(err, "Failed to set up ready check")
 		os.Exit(1)
 	}

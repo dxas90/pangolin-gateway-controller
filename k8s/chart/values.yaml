@@ -132,3 +132,34 @@ persistence:
   enabled: false
   capacity: "8Mi"
   mountPath: "/data"
+
+# PodDisruptionBudget for high availability
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# ServiceMonitor for Prometheus Operator
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# NetworkPolicy to restrict ingress/egress
+networkPolicy:
+  enabled: false
+
+# Admission webhooks (disabled by default)
+# Requires TLS certificates — provide via caBundle or enable certManager integration.
+webhook:
+  enabled: false
+  # failurePolicy: Fail or Ignore
+  failurePolicy: "Fail"
+  # Port for the webhook server inside the container
+  port: 9443
+  # Base64-encoded CA bundle (required if certManager is false)
+  caBundle: ""
+  # Set to true to let cert-manager inject the CA bundle automatically
+  certManager: false
+  # TLS certificate and key paths inside the container
+  certDir: "/tmp/k8s-webhook-server/serving-certs"

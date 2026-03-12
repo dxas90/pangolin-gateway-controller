@@ -1,0 +1,68 @@
+suite: test pod disruption budget
+templates:
+  - poddisruptionbudget.yaml
+tests:
+  - it: should not create PDB when disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create PDB when enabled
+    set:
+      podDisruptionBudget.enabled: true
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: apiVersion
+          value: policy/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-pangolin-gateway-controller
+      - equal:
+          path: metadata.namespace
+          value: pangolin-system
+
+  - it: should set minAvailable from values
+    set:
+      podDisruptionBudget.enabled: true
+      podDisruptionBudget.minAvailable: 2
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 2
+
+  - it: should use default minAvailable of 1
+    set:
+      podDisruptionBudget.enabled: true
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 1
+
+  - it: should have correct selector matchLabels
+    set:
+      podDisruptionBudget.enabled: true
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: pangolin-gateway-controller
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: should include standard labels
+    set:
+      podDisruptionBudget.enabled: true
+    asserts:
+      - exists:
+          path: metadata.labels["helm.sh/chart"]
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: pangolin-gateway-controller
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      - equal:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+          value: Helm

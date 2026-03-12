@@ -1,0 +1,69 @@
+{{- if .Values.webhook.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "base.fullname" . }}-webhook
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "base.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  ports:
+    - port: 443
+      targetPort: webhook
+      protocol: TCP
+      name: webhook
+  selector:
+    {{- include "base.selectorLabels" . | nindent 4 }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "base.fullname" . }}
+  labels:
+    {{- include "base.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+  {{- if .Values.webhook.certManager }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Values.namespace }}/{{ include "base.fullname" . }}-webhook
+  {{- end }}
+webhooks:
+  - name: validate-gateway.pangolin.net
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+    clientConfig:
+      service:
+        name: {{ include "base.fullname" . }}-webhook
+        namespace: {{ .Values.namespace }}
+        path: /validate-gateway
+      {{- if and .Values.webhook.caBundle (not .Values.webhook.certManager) }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+    rules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["gateways"]
+        scope: "Namespaced"
+
+  - name: validate-httproute.pangolin.net
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+    clientConfig:
+      service:
+        name: {{ include "base.fullname" . }}-webhook
+        namespace: {{ .Values.namespace }}
+        path: /validate-httproute
+      {{- if and .Values.webhook.caBundle (not .Values.webhook.certManager) }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+    rules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["httproutes"]
+        scope: "Namespaced"
+{{- end }}

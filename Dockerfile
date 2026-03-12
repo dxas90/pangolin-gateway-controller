@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # ---------- Build stage ----------
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+ARG VCS_REF=unknown
 
 WORKDIR /workspace
 
@@ -25,7 +28,7 @@ RUN CGO_ENABLED=0 \
     GOARCH=${TARGETARCH:-amd64} \
     go build \
       -trimpath \
-      -ldflags="-s -w" \
+      -ldflags="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE}" \
       -o controller \
       cmd/controller/main.go
 

@@ -61,7 +61,7 @@ tests:
             valueFrom:
               secretKeyRef:
                 name: RELEASE-NAME-pangolin-gateway-controller-credentials
-                key: api-key
+                key: apiKey
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -69,7 +69,7 @@ tests:
             valueFrom:
               secretKeyRef:
                 name: RELEASE-NAME-pangolin-gateway-controller-credentials
-                key: org-id
+                key: orgId
 
   - it: should have correct security context
     set:

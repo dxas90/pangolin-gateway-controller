@@ -4,5 +4,15 @@ description: "Kubernetes Gateway API controller for Pangolin platform integratio
 type: application
 version: "0.1.0" # {"$imagepolicy": "playground:pangolin-gateway-controller-policy:tag"}
 appVersion: "0.1.0" # {"$imagepolicy": "playground:pangolin-gateway-controller-policy:tag"}
+icon: "https://fosrl.github.io/pangolin/img/logo.png"
+home: "https://github.com/dxas90/pangolin-gateway-controller"
+sources:
+  - "https://github.com/dxas90/pangolin-gateway-controller"
+keywords:
+  - gateway
+  - kubernetes
+  - pangolin
+  - networking
+  - wireguard
 maintainers:
   - name: "Daniel Ramirez <dxas90@gmail.com>"

@@ -1,0 +1,50 @@
+---
+# ValidatingWebhookConfiguration for Pangolin Gateway Controller
+# Prerequisites:
+#   - TLS certificate/key pair for the webhook server
+#   - The certificate must be signed by a CA trusted by the API server,
+#     or the caBundle field below must contain the CA bundle in PEM format.
+#
+# If using cert-manager, create a Certificate resource and reference its
+# secret here. Otherwise, provide certificates manually.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: pangolin-gateway-controller
+  labels:
+    app.kubernetes.io/name: pangolin-gateway-controller
+    app.kubernetes.io/component: webhook
+webhooks:
+  - name: validate-gateway.pangolin.net
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        name: pangolin-gateway-controller-webhook
+        namespace: pangolin-system
+        path: /validate-gateway
+      # caBundle: <BASE64_CA_BUNDLE>
+    rules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["gateways"]
+        scope: "Namespaced"
+
+  - name: validate-httproute.pangolin.net
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        name: pangolin-gateway-controller-webhook
+        namespace: pangolin-system
+        path: /validate-httproute
+      # caBundle: <BASE64_CA_BUNDLE>
+    rules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["httproutes"]
+        scope: "Namespaced"
