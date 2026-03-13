@@ -257,8 +257,9 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 	r.updateGatewayStatus(ctx, gateway, gatewayv1.GatewayConditionAccepted, true, "Accepted", "Gateway has been accepted")
 
 	log.Info("Successfully reconciled Gateway", "siteID", siteID)
-	// Requeue after 15 minutes to periodically verify site still exists
-	return ctrl.Result{RequeueAfter: 15 * time.Minute}, nil
+	// Requeue after 2 minutes to periodically verify site still exists.
+	// Reduced from 15m so site deletions are caught faster as a safety net.
+	return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
 }
 
 // ensureSite ensures a Pangolin newt-type site exists for the Gateway.

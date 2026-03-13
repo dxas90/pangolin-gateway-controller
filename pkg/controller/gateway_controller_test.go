@@ -198,7 +198,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().Equal(15*time.Minute, result.RequeueAfter, "Should requeue after 15 minutes for verification")
+	s.Require().Equal(2*time.Minute, result.RequeueAfter, "Should requeue after 2 minutes for verification")
 }
 
 // TestReconcile_DeleteGateway tests Gateway deletion with finalizer.
@@ -364,7 +364,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway_SiteDeleted()
 	s.Require().NoError(err)
 
 	// Should requeue for periodic verification
-	s.Require().Equal(15*time.Minute, result.RequeueAfter)
+	s.Require().Equal(2*time.Minute, result.RequeueAfter)
 
 	// Verify Gateway labels were updated with new site ID
 	s.Eventually(func() bool {

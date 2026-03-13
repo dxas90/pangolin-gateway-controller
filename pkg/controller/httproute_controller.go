@@ -309,6 +309,20 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 		}
 
 		if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, log); err != nil {
+			// If the site was deleted in Pangolin, clear the site-id label on the
+			// parent Gateway. The gateway-site controller watches label changes via
+			// LabelChangedPredicate and will immediately recreate the site.
+			if isSiteGoneError(err) {
+				log.Info("Site deleted from Pangolin, clearing gateway site-id to trigger immediate recreation", "siteID", siteIDStr)
+				r.Recorder.Eventf(route, corev1.EventTypeWarning, "SiteGone", "Pangolin site %s was deleted; triggering gateway reconcile", siteIDStr)
+				original := gateway.DeepCopy()
+				delete(gateway.Labels, SiteIDLabel)
+				if patchErr := r.Patch(ctx, gateway, client.MergeFrom(original)); patchErr != nil {
+					log.Error(patchErr, "Failed to clear gateway site-id label")
+				}
+				r.updateRouteStatus(ctx, route, false, "SiteGone", "Parent gateway site was deleted; waiting for recreation")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 			log.Error(err, "Failed to reconcile targets", "resourceID", resourceID, "hostname", hostname)
 			r.updateRouteStatus(ctx, route, false, "TargetError", sanitizeEventMessage(err))
 			r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets for hostname %s: %s", hostname, sanitizeEventMessage(err))

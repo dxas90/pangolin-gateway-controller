@@ -7,8 +7,8 @@ import (
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	pgctrl "github.com/dxas90/pangolin-gateway-controller/pkg/controller"
-	pgmetrics "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	_ "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
+	pgmetrics "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/webhook"
 

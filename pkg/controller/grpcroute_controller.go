@@ -213,10 +213,29 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 			r.updateRouteStatus(ctx, route, false, "ResourceVerificationFailed", sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
+		// verifyOrRecreateResource may have patched the label with a new resource ID
+		// (after drift/recreation). Refresh the local variable so reconcileTargets
+		// uses the current ID and not the now-deleted one.
+		if updated := route.Labels[ResourceIDLabel]; updated != "" {
+			resourceID = updated
+		}
 	}
 
 	// Create or update targets for backends
 	if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
+		// If the site was deleted in Pangolin, clear the gateway site-id label to
+		// trigger immediate re-creation by the gateway-site controller.
+		if isSiteGoneError(err) {
+			log.Info("Site deleted from Pangolin, clearing gateway site-id to trigger immediate recreation", "siteID", siteIDStr)
+			r.Recorder.Eventf(route, corev1.EventTypeWarning, "SiteGone", "Pangolin site %s was deleted; triggering gateway reconcile", siteIDStr)
+			original := gateway.DeepCopy()
+			delete(gateway.Labels, SiteIDLabel)
+			if patchErr := r.Patch(ctx, gateway, client.MergeFrom(original)); patchErr != nil {
+				log.Error(patchErr, "Failed to clear gateway site-id label")
+			}
+			r.updateRouteStatus(ctx, route, false, "SiteGone", "Parent gateway site was deleted; waiting for recreation")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		log.Error(err, "Failed to reconcile targets")
 		r.updateRouteStatus(ctx, route, false, "TargetError", sanitizeEventMessage(err))
 		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", sanitizeEventMessage(err))
@@ -253,7 +272,29 @@ func (r *GRPCRouteReconciler) verifyOrRecreateResource(ctx context.Context, rout
 	}
 
 	if found == nil {
-		// Resource genuinely deleted in Pangolin, recreate
+		// Resource is genuinely gone. Before attempting a full recreation, check
+		// whether a resource with the expected name already exists — this happens
+		// when a concurrent reconcile (or another controller pod) just recreated it
+		// and we lost the race. Adopting it avoids a 409 conflict loop.
+		expectedName := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
+		for _, res := range resources {
+			if resName, _ := res["name"].(string); resName == expectedName {
+				if newID := fmt.Sprintf("%v", res["resourceId"]); newID != "" && newID != "<nil>" {
+					original := route.DeepCopy()
+					if route.Labels == nil {
+						route.Labels = make(map[string]string)
+					}
+					route.Labels[ResourceIDLabel] = newID
+					if patchErr := r.Patch(ctx, route, client.MergeFrom(original)); patchErr != nil {
+						return fmt.Errorf("failed to adopt existing resource %s: %w", newID, patchErr)
+					}
+					log.Info("Adopted existing resource with matching name after deletion", "resourceID", newID, "name", expectedName)
+					r.Recorder.Eventf(route, corev1.EventTypeWarning, "DriftDetected", "Adopted existing Pangolin resource %s for %s", newID, expectedName)
+					return nil
+				}
+			}
+		}
+		// Truly gone — recreate
 		log.Info("Resource not found in Pangolin, recreating", "resourceID", resourceID)
 		r.Recorder.Eventf(route, corev1.EventTypeWarning, "DriftDetected", "Pangolin resource %s not found, recreating", resourceID)
 		return r.recreateResource(ctx, route, gateway, resourceID, log)

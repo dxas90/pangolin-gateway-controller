@@ -118,11 +118,11 @@ one-local: docker-build kind-load ## Build image, load into kind, install CRDs, 
 
 .PHONY: install
 install: ## Install Gateway API CRDs.
-	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
+	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
 
 .PHONY: uninstall
 uninstall: ## Uninstall Gateway API CRDs.
-	kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
+	kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
 
 .PHONY: deploy
 deploy: ## Deploy controller to the K8s cluster.

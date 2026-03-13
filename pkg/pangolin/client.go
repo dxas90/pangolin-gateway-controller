@@ -549,63 +549,28 @@ func (c *Client) DisableSSO(ctx context.Context, resourceID string) error {
 	return err
 }
 
-// ListDomains lists all domains for the organization, transparently paginating
-// through all pages. Uses the same pagination approach as ListSites/ListResources.
+// ListDomains lists all domains for the organization.
 // Endpoint: GET /org/{orgId}/domains
+// Note: this endpoint does not support pagination parameters.
 func (c *Client) ListDomains(ctx context.Context) ([]map[string]interface{}, error) {
-	type paginatedResponse struct {
+	type domainsResponse struct {
 		Data struct {
-			Domains    []map[string]interface{} `json:"domains"`
-			Pagination struct {
-				Total    int `json:"total"`
-				PageSize int `json:"pageSize"`
-				Page     int `json:"page"`
-				// Legacy fields (Pangolin < 1.16.0)
-				Limit  int `json:"limit"`
-				Offset int `json:"offset"`
-			} `json:"pagination"`
+			Domains []map[string]interface{} `json:"domains"`
 		} `json:"data"`
 	}
 
-	var allDomains []map[string]interface{}
-	basePath := fmt.Sprintf("/org/%s/domains", c.OrgID)
-
-	for page := 1; page <= listMaxPages; page++ {
-		path := fmt.Sprintf("%s?pageSize=%d&page=%d", basePath, listPageSize, page)
-		respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		var resp paginatedResponse
-		if err := json.Unmarshal(respBody, &resp); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal list domains response (page %d): %w", page, err)
-		}
-
-		allDomains = append(allDomains, resp.Data.Domains...)
-
-		// Determine the effective page size — newer API returns pageSize,
-		// older API returns limit; fall back to listPageSize if both are zero.
-		effPageSize := resp.Data.Pagination.PageSize
-		if effPageSize == 0 {
-			effPageSize = resp.Data.Pagination.Limit
-		}
-		if effPageSize == 0 {
-			effPageSize = listPageSize
-		}
-
-		// Stop when we've collected all items or the page came back empty.
-		if len(resp.Data.Domains) == 0 || len(allDomains) >= resp.Data.Pagination.Total {
-			break
-		}
-		// Also stop if the server returned fewer items than requested
-		// (last page).
-		if len(resp.Data.Domains) < effPageSize {
-			break
-		}
+	path := fmt.Sprintf("/org/%s/domains", c.OrgID)
+	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
 	}
 
-	return allDomains, nil
+	var resp domainsResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal list domains response: %w", err)
+	}
+
+	return resp.Data.Domains, nil
 }
 
 // ListResources lists all resources for the organization, transparently
@@ -695,8 +660,10 @@ func (c *Client) ListTargetsRaw(ctx context.Context, resourceID string) ([]map[s
 	var allTargets []map[string]interface{}
 	basePath := fmt.Sprintf("/resource/%s/targets", resourceID)
 
-	for page := 1; page <= listMaxPages; page++ {
-		path := fmt.Sprintf("%s?pageSize=%d&page=%d", basePath, listPageSize, page)
+	// The targets endpoint uses limit/offset pagination (not pageSize/page).
+	for pageIdx := 0; pageIdx < listMaxPages; pageIdx++ {
+		offset := pageIdx * listPageSize
+		path := fmt.Sprintf("%s?limit=%d&offset=%d", basePath, listPageSize, offset)
 		respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
 		if err != nil {
 			return nil, err
@@ -704,28 +671,23 @@ func (c *Client) ListTargetsRaw(ctx context.Context, resourceID string) ([]map[s
 
 		var resp paginatedResponse
 		if err := json.Unmarshal(respBody, &resp); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal list targets response (page %d): %w", page, err)
+			return nil, fmt.Errorf("failed to unmarshal list targets response (offset %d): %w", offset, err)
 		}
 
 		allTargets = append(allTargets, resp.Data.Targets...)
 
-		// Determine the effective page size — newer API returns pageSize,
-		// older API returns limit; fall back to listPageSize if both are zero.
-		effPageSize := resp.Data.Pagination.PageSize
-		if effPageSize == 0 {
-			effPageSize = resp.Data.Pagination.Limit
-		}
-		if effPageSize == 0 {
-			effPageSize = listPageSize
+		// The targets endpoint returns limit/offset in the pagination envelope.
+		effLimit := resp.Data.Pagination.Limit
+		if effLimit == 0 {
+			effLimit = listPageSize
 		}
 
 		// Stop when we've collected all items or the page came back empty.
 		if len(resp.Data.Targets) == 0 || len(allTargets) >= resp.Data.Pagination.Total {
 			break
 		}
-		// Also stop if the server returned fewer items than requested
-		// (last page).
-		if len(resp.Data.Targets) < effPageSize {
+		// Also stop if the server returned fewer items than the requested limit (last page).
+		if len(resp.Data.Targets) < effLimit {
 			break
 		}
 	}

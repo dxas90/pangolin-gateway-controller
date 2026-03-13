@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -29,6 +30,17 @@ func extractSubdomainFromDomains(hostname string, domains []map[string]interface
 		}
 	}
 	return "", "", fmt.Errorf("no matching domain found for hostname %s", hostname)
+}
+
+// isSiteGoneError returns true when err indicates that the Pangolin site referenced
+// by a target no longer exists (404 "Site with ID N not found"). This happens when
+// a site is deleted directly in Pangolin after the Gateway was last reconciled.
+func isSiteGoneError(err error) bool {
+	if err == nil {
+		return false
+	}
+	apiErr, ok := pangolin.AsPangolinAPIError(err)
+	return ok && apiErr.IsNotFound() && strings.Contains(apiErr.Message, "Site")
 }
 
 // numericToString converts numeric interface values to string for comparison
@@ -116,18 +128,36 @@ func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Cont
 		"stickySession": false,
 	}
 
-	respData, err := r.PangolinClient.CreateResource(ctx, resourceData)
-	if err != nil {
-		return "", fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	rawID := respData["resourceId"]
-	if rawID == nil {
-		return "", fmt.Errorf("no resourceId in response")
-	}
-	resourceID := fmt.Sprintf("%v", rawID)
-	if resourceID == "" {
-		return "", fmt.Errorf("no resourceId in response")
+	var resourceID string
+	respData, createErr := r.PangolinClient.CreateResource(ctx, resourceData)
+	if createErr != nil {
+		// On 409 conflict, another reconcile just created this resource concurrently.
+		// Find and adopt it instead of failing so convergence is immediate.
+		if apiErr, ok := pangolin.AsPangolinAPIError(createErr); ok && apiErr.IsConflict() {
+			if resources, listErr := r.PangolinClient.ListResources(ctx); listErr == nil {
+				for _, res := range resources {
+					if name, _ := res["name"].(string); name == resourceName {
+						if id := fmt.Sprintf("%v", res["resourceId"]); id != "" && id != "<nil>" {
+							log.Info("Adopted existing resource after creation conflict", "resourceID", id, "hostname", hostname)
+							resourceID = id
+							break
+						}
+					}
+				}
+			}
+		}
+		if resourceID == "" {
+			return "", fmt.Errorf("failed to create resource: %w", createErr)
+		}
+	} else {
+		rawID := respData["resourceId"]
+		if rawID == nil {
+			return "", fmt.Errorf("no resourceId in response")
+		}
+		resourceID = fmt.Sprintf("%v", rawID)
+		if resourceID == "" {
+			return "", fmt.Errorf("no resourceId in response")
+		}
 	}
 
 	headers := r.extractHeadersFromRoute(route, log)
