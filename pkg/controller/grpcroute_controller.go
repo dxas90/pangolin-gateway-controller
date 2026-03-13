@@ -113,7 +113,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 	if len(route.Spec.ParentRefs) == 0 {
 		log.Info("No parent gateway references found")
 		r.updateRouteStatus(ctx, route, false, "NoParentGateway", "No parent gateway references configured")
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	parentRef := route.Spec.ParentRefs[0]
@@ -193,28 +193,60 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-// verifyOrRecreateResource checks if the resource exists in Pangolin and recreates if deleted
+// verifyOrRecreateResource checks if the resource exists in Pangolin using
+// ListResources (looking up by ID) and recreates if genuinely deleted.
+// Unlike the previous ListTargetsRaw approach, this properly distinguishes
+// 404 (resource deleted) from transient errors (network failures, 5xx).
 func (r *GRPCRouteReconciler) verifyOrRecreateResource(ctx context.Context, route *gatewayv1.GRPCRoute, gateway *gatewayv1.Gateway, resourceID string, log logr.Logger) error {
-	// Try to get existing targets to verify resource exists
-	_, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
+	resources, err := r.PangolinClient.ListResources(ctx)
 	if err != nil {
-		// Resource likely doesn't exist, recreate it
-		log.Info("Resource not found in Pangolin, recreating", "resourceID", resourceID)
-		newResourceID, createErr := r.createPangolinResource(ctx, route, gateway, log)
-		if createErr != nil {
-			return fmt.Errorf("failed to recreate resource: %w", createErr)
-		}
-		// Update route labels with new resource ID using Patch to avoid overwriting
-		original := route.DeepCopy()
-		if route.Labels == nil {
-			route.Labels = make(map[string]string)
-		}
-		route.Labels[ResourceIDLabel] = newResourceID
-		if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
-			return fmt.Errorf("failed to patch route with new resource ID: %w", err)
-		}
-		log.Info("Recreated resource after deletion", "oldResourceID", resourceID, "newResourceID", newResourceID)
+		// Transient error — do not recreate, just propagate
+		return fmt.Errorf("failed to list resources for verification: %w", err)
 	}
+
+	// Search for our resource by ID
+	var found map[string]interface{}
+	for _, res := range resources {
+		if fmt.Sprintf("%v", res["resourceId"]) == resourceID {
+			found = res
+			break
+		}
+	}
+
+	if found == nil {
+		// Resource genuinely deleted in Pangolin, recreate
+		log.Info("Resource not found in Pangolin, recreating", "resourceID", resourceID)
+		r.Recorder.Eventf(route, corev1.EventTypeWarning, "DriftDetected", "Pangolin resource %s not found, recreating", resourceID)
+		return r.recreateResource(ctx, route, gateway, resourceID, log)
+	}
+
+	// Resource exists — check for name drift (informational only, rename not supported by API)
+	expectedName := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
+	if name, ok := found["name"].(string); ok && name != expectedName {
+		log.Info("Resource name drift detected (cannot auto-correct)", "resourceID", resourceID, "expected", expectedName, "actual", name)
+	}
+
+	return nil
+}
+
+// recreateResource creates a new Pangolin resource for a GRPCRoute after the
+// original was deleted, updates the route label with the new resource ID, and
+// emits a Kubernetes Event.
+func (r *GRPCRouteReconciler) recreateResource(ctx context.Context, route *gatewayv1.GRPCRoute, gateway *gatewayv1.Gateway, oldResourceID string, log logr.Logger) error {
+	newResourceID, err := r.createPangolinResource(ctx, route, gateway, log)
+	if err != nil {
+		return fmt.Errorf("failed to recreate resource: %w", err)
+	}
+	original := route.DeepCopy()
+	if route.Labels == nil {
+		route.Labels = make(map[string]string)
+	}
+	route.Labels[ResourceIDLabel] = newResourceID
+	if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("failed to patch route with new resource ID: %w", err)
+	}
+	log.Info("Recreated resource after deletion", "oldResourceID", oldResourceID, "newResourceID", newResourceID)
+	r.Recorder.Eventf(route, corev1.EventTypeNormal, "ResourceRecreated", "Recreated Pangolin resource (old: %s, new: %s)", oldResourceID, newResourceID)
 	return nil
 }
 

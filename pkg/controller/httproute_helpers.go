@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -180,4 +181,66 @@ func (r *HTTPRouteReconciler) extractHeadersFromRoute(route *gatewayv1.HTTPRoute
 	}
 
 	return headers
+}
+
+// verifyOrUpdateResource checks if an existing Pangolin resource config matches
+// the desired state and updates it if there is drift. Uses the already-fetched
+// allResources slice to avoid an extra API call.
+func (r *HTTPRouteReconciler) verifyOrUpdateResource(ctx context.Context, route *gatewayv1.HTTPRoute, resourceID, hostname string, allResources []map[string]interface{}, domains []map[string]interface{}, log logr.Logger) error {
+	// Find the resource by ID in the pre-fetched list
+	var current map[string]interface{}
+	for _, res := range allResources {
+		if fmt.Sprintf("%v", res["resourceId"]) == resourceID {
+			current = res
+			break
+		}
+	}
+
+	if current == nil {
+		// Resource disappeared — will be recreated on next reconciliation
+		log.Info("Resource no longer found during drift check", "resourceID", resourceID, "hostname", hostname)
+		r.Recorder.Eventf(route, corev1.EventTypeWarning, "DriftDetected", "Pangolin resource %s for hostname %s disappeared", resourceID, hostname)
+		return nil
+	}
+
+	// Check headers drift
+	desiredHeaders := r.extractHeadersFromRoute(route, log)
+	currentHeadersRaw := current["headers"]
+	hasHeaderDrift := len(desiredHeaders) > 0 && currentHeadersRaw == nil
+
+	// Check SSO drift: annotation says disable but SSO is still enabled
+	disableSSO := route.Annotations["gateway.pangolin.net/disable-sso"] == "true"
+	currentSSO, _ := current["sso"].(bool)
+	hasSSODrift := disableSSO && currentSSO
+
+	if !hasHeaderDrift && !hasSSODrift {
+		log.V(1).Info("No drift detected on resource config", "resourceID", resourceID, "hostname", hostname)
+		return nil
+	}
+
+	log.Info("Drift detected on resource config, updating", "resourceID", resourceID, "hostname", hostname, "headerDrift", hasHeaderDrift, "ssoDrift", hasSSODrift)
+	r.Recorder.Eventf(route, corev1.EventTypeWarning, "DriftDetected", "Config drift detected on Pangolin resource %s for hostname %s", resourceID, hostname)
+
+	if hasHeaderDrift {
+		updateData := map[string]interface{}{
+			"stickySession": false,
+			"ssl":           true,
+			"headers":       desiredHeaders,
+		}
+		if err := r.PangolinClient.UpdateResource(ctx, resourceID, updateData); err != nil {
+			log.Error(err, "Failed to correct header drift", "resourceID", resourceID)
+		} else {
+			log.Info("Corrected header drift", "resourceID", resourceID)
+		}
+	}
+
+	if hasSSODrift {
+		if err := r.PangolinClient.DisableSSO(ctx, resourceID); err != nil {
+			log.Error(err, "Failed to correct SSO drift", "resourceID", resourceID)
+		} else {
+			log.Info("Corrected SSO drift", "resourceID", resourceID)
+		}
+	}
+
+	return nil
 }

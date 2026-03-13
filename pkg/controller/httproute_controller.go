@@ -196,7 +196,7 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 	if len(route.Spec.Hostnames) == 0 {
 		log.Info("No hostnames specified, cannot create resources")
 		r.updateRouteStatus(ctx, route, false, "NoHostnames", "HTTPRoute has no hostnames configured")
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
 	// Cache domain list once for the entire reconciliation
@@ -243,6 +243,11 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 			r.Recorder.Eventf(route, corev1.EventTypeNormal, "ResourceCreated", "Created Pangolin resource %s for hostname %s", resourceID, hostname)
 		} else {
 			log.V(1).Info("Using existing Pangolin resource", "resourceID", resourceID, "hostname", hostname)
+			// Verify resource config matches desired state (drift detection)
+			if err := r.verifyOrUpdateResource(ctx, route, resourceID, string(hostname), allResources, domains, log); err != nil {
+				log.Error(err, "Failed to verify resource drift", "resourceID", resourceID)
+				// Non-fatal: continue to target reconciliation
+			}
 		}
 
 		if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, log); err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -306,7 +307,8 @@ func (r *GatewayReconciler) ensureSite(ctx context.Context, gateway *gatewayv1.G
 	return createdSite, nil
 }
 
-// verifyOrRecreateSite checks if the site exists in Pangolin and recreates if deleted
+// verifyOrRecreateSite checks if the site exists in Pangolin, verifies its
+// name matches the expected pattern, and recreates if deleted.
 func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *gatewayv1.Gateway, siteIDStr string, log logr.Logger) error {
 	site, err := r.PangolinClient.GetSite(ctx, siteIDStr)
 	if err != nil {
@@ -315,12 +317,20 @@ func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *g
 			if apiErr, ok := pangolin.AsPangolinAPIError(err); ok && apiErr.StatusCode == 404 {
 				// Site not found, recreate
 				log.Info("Site not found in Pangolin, will recreate", "siteID", siteIDStr)
+				r.Recorder.Eventf(gateway, corev1.EventTypeWarning, "DriftDetected", "Pangolin site %s not found, recreating", siteIDStr)
 				return r.recreateSite(ctx, gateway, siteIDStr, log)
 			}
 		}
 		return fmt.Errorf("failed to get site %s: %w", siteIDStr, err)
 	}
-	_ = site // site exists, no action needed
+
+	// Verify site name matches expected pattern
+	expectedName := fmt.Sprintf("pgc-%s", gateway.Name)
+	if site.Name != "" && site.Name != expectedName {
+		log.Info("Site name drift detected", "expected", expectedName, "actual", site.Name, "siteID", siteIDStr)
+		r.Recorder.Eventf(gateway, corev1.EventTypeWarning, "DriftDetected", "Pangolin site name drifted from %s to %s (cannot auto-correct, site rename not supported)", expectedName, site.Name)
+	}
+
 	return nil
 }
 
@@ -345,6 +355,26 @@ func (r *GatewayReconciler) recreateSite(ctx context.Context, gateway *gatewayv1
 
 	if err := r.Patch(ctx, gateway, client.MergeFrom(originalLabels)); err != nil {
 		return fmt.Errorf("failed to update Gateway with new site ID: %w", err)
+	}
+
+	// Trigger a rolling restart of the newt Deployment so it picks up the new
+	// credentials. Kubernetes does NOT auto-restart pods when SecretKeyRef env
+	// vars change, so we must bump the pod template annotation explicitly.
+	deploymentName := fmt.Sprintf("%s-newt", gateway.Name)
+	deployment := &appsv1.Deployment{}
+	if getErr := r.Get(ctx, client.ObjectKey{Namespace: gateway.Namespace, Name: deploymentName}, deployment); getErr == nil {
+		patch := client.MergeFrom(deployment.DeepCopy())
+		if deployment.Spec.Template.Annotations == nil {
+			deployment.Spec.Template.Annotations = make(map[string]string)
+		}
+		deployment.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().UTC().Format(time.RFC3339)
+		if patchErr := r.Patch(ctx, deployment, patch); patchErr != nil {
+			log.Error(patchErr, "Failed to restart newt deployment after site recreation", "deployment", deploymentName)
+		} else {
+			log.Info("Triggered newt deployment restart after site recreation", "deployment", deploymentName)
+		}
+	} else if !errors.IsNotFound(getErr) {
+		log.Error(getErr, "Failed to get newt deployment for restart", "deployment", deploymentName)
 	}
 
 	log.Info("Recreated site after deletion", "oldSiteID", oldSiteIDStr, "newSiteID", newSite.ID)
