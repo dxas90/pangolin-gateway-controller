@@ -7,6 +7,7 @@ import (
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	pgctrl "github.com/dxas90/pangolin-gateway-controller/pkg/controller"
+	pgmetrics "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	_ "github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/webhook"
@@ -80,6 +81,19 @@ func main() {
 	if cfg.Pangolin.BaseURL != "" {
 		pangolinClient.BaseURL = cfg.Pangolin.BaseURL
 	}
+
+	// Wire circuit breaker state-change logging and metrics
+	pangolinClient.Breaker.SetStateChangeCallback(func(from, to string) {
+		setupLog.Info("Pangolin API circuit breaker state changed", "from", from, "to", to)
+		switch to {
+		case "closed":
+			pgmetrics.CircuitBreakerState.Set(0)
+		case "open":
+			pgmetrics.CircuitBreakerState.Set(1)
+		case "half-open":
+			pgmetrics.CircuitBreakerState.Set(2)
+		}
+	})
 
 	// Setup manager
 	// SyncPeriod forces a full re-list of all watched objects at this interval,

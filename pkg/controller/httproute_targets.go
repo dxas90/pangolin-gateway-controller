@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,6 +30,8 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	if err != nil {
 		return fmt.Errorf("failed to list existing targets for resource %s: %w", resourceID, err)
 	}
+	// Update gauge with current targets count
+	metrics.PangolinTargets.WithLabelValues("true").Set(float64(len(existingTargets)))
 
 	// Track which existing targets are still needed (to identify orphans)
 	matchedTargetIDs := make(map[string]bool)

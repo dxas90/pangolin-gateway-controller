@@ -217,6 +217,34 @@ func TestValidate_AllLogLevels(t *testing.T) {
 	}
 }
 
+func TestValidate_BaseDelayExceedsMaxDelay(t *testing.T) {
+	c := validConfig()
+	c.Logging.Level = "info"
+	c.Controller.RateLimiterBaseDelay = 10 * time.Second
+	c.Controller.RateLimiterMaxDelay = 1 * time.Second // less than base delay
+	err := c.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rateLimiterBaseDelay")
+}
+
+func TestValidate_BaseDelayEqualsMaxDelay(t *testing.T) {
+	c := validConfig()
+	c.Logging.Level = "info"
+	c.Controller.RateLimiterBaseDelay = 5 * time.Second
+	c.Controller.RateLimiterMaxDelay = 5 * time.Second // equal is allowed
+	err := c.Validate()
+	require.NoError(t, err)
+}
+
+func TestValidate_NegativeBaseDelay(t *testing.T) {
+	c := validConfig()
+	c.Logging.Level = "info"
+	c.Controller.RateLimiterBaseDelay = -1 * time.Millisecond
+	err := c.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rateLimiterBaseDelay")
+}
+
 // ---------------------------------------------------------------------------
 // TestLoadFromEnv
 // ---------------------------------------------------------------------------

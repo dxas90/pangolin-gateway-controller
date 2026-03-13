@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
+	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -37,8 +38,15 @@ type GRPCRouteReconciler struct {
 
 // Reconcile implements the reconciliation logic for GRPCRoute resources
 func (r *GRPCRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	startTime := time.Now()
 	log := r.Log.WithValues("grpcroute", req.NamespacedName)
 	log.Info("Reconciling GRPCRoute")
+
+	// Track reconciliation duration
+	defer func() {
+		duration := time.Since(startTime).Seconds()
+		metrics.ReconcileDuration.WithLabelValues("grpcroute").Observe(duration)
+	}()
 
 	ctx, cancel := context.WithTimeout(ctx, ReconcileTimeout)
 	defer cancel()
@@ -48,15 +56,29 @@ func (r *GRPCRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, req.NamespacedName, route); err != nil {
 		if errors.IsNotFound(err) {
 			log.Info("GRPCRoute resource not found, likely deleted")
+			metrics.ReconcileTotal.WithLabelValues("grpcroute", "not_found").Inc()
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Failed to get GRPCRoute")
+		metrics.ReconcileTotal.WithLabelValues("grpcroute", "error").Inc()
 		return ctrl.Result{}, err
+	}
+
+	// Count actual GRPCRoutes in namespace for accurate metric
+	var routeList gatewayv1.GRPCRouteList
+	if listErr := r.List(ctx, &routeList, client.InNamespace(route.Namespace)); listErr == nil {
+		metrics.GRPCRouteTotal.WithLabelValues(route.Namespace).Set(float64(len(routeList.Items)))
 	}
 
 	// Handle deletion
 	if !route.ObjectMeta.DeletionTimestamp.IsZero() {
-		return r.handleDelete(ctx, route, log)
+		result, err := r.handleDelete(ctx, route, log)
+		if err != nil {
+			metrics.ReconcileTotal.WithLabelValues("grpcroute", "error").Inc()
+		} else {
+			metrics.ReconcileTotal.WithLabelValues("grpcroute", "deleted").Inc()
+		}
+		return result, err
 	}
 
 	// Add finalizer if not present
@@ -65,12 +87,21 @@ func (r *GRPCRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		controllerutil.AddFinalizer(route, FinalizerName)
 		if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to add finalizer")
+			metrics.ReconcileTotal.WithLabelValues("grpcroute", "error").Inc()
 			return ctrl.Result{}, err
 		}
 	}
 
 	// Reconcile the GRPCRoute
-	return r.reconcileGRPCRoute(ctx, route, log)
+	result, err := r.reconcileGRPCRoute(ctx, route, log)
+	if err != nil {
+		metrics.ReconcileTotal.WithLabelValues("grpcroute", "error").Inc()
+	} else if result.Requeue || result.RequeueAfter > 0 {
+		metrics.ReconcileTotal.WithLabelValues("grpcroute", "requeue").Inc()
+	} else {
+		metrics.ReconcileTotal.WithLabelValues("grpcroute", "success").Inc()
+	}
+	return result, err
 }
 
 // handleDelete handles the deletion of a GRPCRoute resource
@@ -157,7 +188,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 		newResourceID, err := r.createPangolinResource(ctx, route, gateway, log)
 		if err != nil {
 			log.Error(err, "Failed to create Pangolin resource")
-			r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
+			r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", sanitizeEventMessage(err))
 			r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource: %s", sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
@@ -179,7 +210,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 		// Verify resource still exists in Pangolin, recreate if deleted
 		if err := r.verifyOrRecreateResource(ctx, route, gateway, resourceID, log); err != nil {
 			log.Error(err, "Failed to verify/recreate resource")
-			r.updateRouteStatus(ctx, route, false, "ResourceVerificationFailed", err.Error())
+			r.updateRouteStatus(ctx, route, false, "ResourceVerificationFailed", sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 	}
@@ -187,7 +218,7 @@ func (r *GRPCRouteReconciler) reconcileGRPCRoute(ctx context.Context, route *gat
 	// Create or update targets for backends
 	if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, gateway, log); err != nil {
 		log.Error(err, "Failed to reconcile targets")
-		r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
+		r.updateRouteStatus(ctx, route, false, "TargetError", sanitizeEventMessage(err))
 		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", sanitizeEventMessage(err))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
@@ -471,6 +502,18 @@ func (r *GRPCRouteReconciler) updateRouteStatus(ctx context.Context, route *gate
 		}
 		if accepted {
 			condition.Status = metav1.ConditionTrue
+		}
+		// Preserve LastTransitionTime if status hasn't changed for this parent
+		for _, ps := range current.Status.Parents {
+			if ps.ParentRef.Name == parentRef.Name {
+				for _, existing := range ps.Conditions {
+					if existing.Type == condition.Type && existing.Status == condition.Status {
+						condition.LastTransitionTime = existing.LastTransitionTime
+						break
+					}
+				}
+				break
+			}
 		}
 		newParent := gatewayv1.RouteParentStatus{
 			ParentRef:      parentRef,

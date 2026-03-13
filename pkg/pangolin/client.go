@@ -21,8 +21,10 @@ const (
 	// DefaultBaseURL is the default Pangolin API endpoint
 	DefaultBaseURL = "https://api.pangolin.net/v1"
 
-	// DefaultTimeout is the default HTTP client timeout
-	DefaultTimeout = 30 * time.Second
+	// DefaultTimeout is the default HTTP client timeout.
+	// Must be less than ReconcileTimeout (30s) so a single slow API call
+	// cannot exhaust the entire reconcile budget.
+	DefaultTimeout = 15 * time.Second
 
 	// maxResponseBodySize limits how many bytes we read from API responses
 	// to prevent memory exhaustion from unexpectedly large payloads.
@@ -219,11 +221,15 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	if resp.StatusCode >= 400 {
 		metrics.PangolinAPIErrors.WithLabelValues(normalizedPath, method, statusCode).Inc()
+		msg := string(respBody)
+		if len(msg) > 512 {
+			msg = msg[:512] + "... [truncated]"
+		}
 		apiErr := &PangolinAPIError{
 			StatusCode: resp.StatusCode,
 			Endpoint:   path,
 			Method:     method,
-			Message:    string(respBody),
+			Message:    msg,
 		}
 		if c.Breaker != nil {
 			if apiErr.IsRetryable() {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
+	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -72,24 +73,38 @@ type NewtReconciler struct {
 //   - ctrl.Result: Indicates if/when reconciliation should be retried
 //   - error: Any error encountered during reconciliation
 func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	startTime := time.Now()
 	log := r.Log.WithValues("gateway", req.NamespacedName)
+
+	// Track reconciliation duration
+	defer func() {
+		duration := time.Since(startTime).Seconds()
+		metrics.ReconcileDuration.WithLabelValues("newt").Observe(duration)
+	}()
 
 	// Fetch the Gateway
 	var gateway gatewayv1.Gateway
 	if err := r.Get(ctx, req.NamespacedName, &gateway); err != nil {
 		if errors.IsNotFound(err) {
+			metrics.ReconcileTotal.WithLabelValues("newt", "not_found").Inc()
 			return ctrl.Result{}, nil
 		}
+		metrics.ReconcileTotal.WithLabelValues("newt", "error").Inc()
 		return ctrl.Result{}, err
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, ReconcileTimeout)
+	defer cancel()
+
 	// Skip if not our gateway class
 	if string(gateway.Spec.GatewayClassName) != r.ControllerClass {
+		metrics.ReconcileTotal.WithLabelValues("newt", "skipped").Inc()
 		return ctrl.Result{}, nil
 	}
 
 	// Skip reconciliation for gateways being deleted
 	if !gateway.ObjectMeta.DeletionTimestamp.IsZero() {
+		metrics.ReconcileTotal.WithLabelValues("newt", "skipped").Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -97,6 +112,7 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	siteID := gateway.Labels[SiteIDLabel]
 	if siteID == "" {
 		log.Info("Gateway does not have site ID yet, skipping newt deployment")
+		metrics.ReconcileTotal.WithLabelValues("newt", "skipped").Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -106,9 +122,12 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Get(ctx, client.ObjectKey{Namespace: gateway.Namespace, Name: secretName}, secret); err != nil {
 		if errors.IsNotFound(err) {
 			log.Info("Newt credentials secret not found yet, will retry")
+			metrics.ReconcileTotal.WithLabelValues("newt", "requeue").Inc()
+			r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "CredentialsNotFound", "Newt credentials secret %s-newt-cred not found, will retry", gateway.Name)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 		log.Error(err, "Failed to get newt credentials secret")
+		metrics.ReconcileTotal.WithLabelValues("newt", "error").Inc()
 		return ctrl.Result{}, err
 	}
 
@@ -121,9 +140,13 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// Ensure newt deployment exists
 	if err := r.ensureNewtDeployment(ctx, &gateway, site, log); err != nil {
 		log.Error(err, "Failed to ensure newt deployment")
+		metrics.ReconcileTotal.WithLabelValues("newt", "error").Inc()
+		r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "DeploymentFailed", "Failed to ensure newt deployment: %s", err.Error())
 		return ctrl.Result{}, err
 	}
 
+	metrics.ReconcileTotal.WithLabelValues("newt", "success").Inc()
+	r.Recorder.Eventf(&gateway, corev1.EventTypeNormal, "NewtDeploymentEnsured", "Newt VPN deployment %s-newt ensured", gateway.Name)
 	return ctrl.Result{}, nil
 }
 

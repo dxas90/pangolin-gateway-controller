@@ -106,6 +106,15 @@ var (
 		},
 		[]string{"enabled"}, // enabled: true/false
 	)
+
+	// CircuitBreakerState tracks the current state of the Pangolin API circuit breaker.
+	// Values: 0=closed (normal), 1=open (failing fast), 2=half-open (probing).
+	CircuitBreakerState = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "pangolin_circuit_breaker_state",
+			Help: "Current state of the Pangolin API circuit breaker (0=closed, 1=open, 2=half-open)",
+		},
+	)
 )
 
 func init() {
@@ -122,5 +131,6 @@ func init() {
 		PangolinSites,
 		PangolinResources,
 		PangolinTargets,
+		CircuitBreakerState,
 	)
 }

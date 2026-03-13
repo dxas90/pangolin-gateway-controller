@@ -25,12 +25,13 @@ const (
 //	HALF_OPEN → (success)                   → CLOSED
 //	HALF_OPEN → (failure)                   → OPEN
 type CircuitBreaker struct {
-	mu          sync.Mutex
-	state       circuitState
-	failures    int
-	threshold   int
-	timeout     time.Duration
-	lastFailure time.Time
+	mu            sync.Mutex
+	state         circuitState
+	failures      int
+	threshold     int
+	timeout       time.Duration
+	lastFailure   time.Time
+	onStateChange func(from, to string) // Optional callback, invoked on state transitions
 }
 
 // NewCircuitBreaker creates a CircuitBreaker that opens after `threshold` consecutive
@@ -41,6 +42,15 @@ func NewCircuitBreaker(threshold int, timeout time.Duration) *CircuitBreaker {
 		timeout:   timeout,
 		state:     stateClosed,
 	}
+}
+
+// SetStateChangeCallback sets an optional callback invoked when the circuit state changes.
+// The callback receives the previous and new state names ("closed", "open", "half-open").
+// It is called while the mutex is NOT held, so it is safe to log or update metrics.
+func (cb *CircuitBreaker) SetStateChangeCallback(fn func(from, to string)) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.onStateChange = fn
 }
 
 // Allow returns ErrCircuitOpen if requests should be fast-failed.
@@ -62,26 +72,43 @@ func (cb *CircuitBreaker) Allow() error {
 // RecordSuccess resets failure count and returns the circuit to CLOSED.
 func (cb *CircuitBreaker) RecordSuccess() {
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
-	cb.failures = 0
-	cb.state = stateClosed
+	var callback func(from, to string)
+	var from string
+	if cb.state != stateClosed {
+		from = cb.stateName()
+		cb.failures = 0
+		cb.state = stateClosed
+		callback = cb.onStateChange
+	} else {
+		cb.failures = 0
+	}
+	cb.mu.Unlock()
+	if callback != nil {
+		callback(from, "closed")
+	}
 }
 
 // RecordFailure records a retryable failure and opens the circuit when the threshold is reached.
 func (cb *CircuitBreaker) RecordFailure() {
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
 	cb.failures++
 	cb.lastFailure = time.Now()
-	if cb.failures >= cb.threshold {
+	var callback func(from, to string)
+	var from string
+	if cb.failures >= cb.threshold && cb.state != stateOpen {
+		from = cb.stateName()
 		cb.state = stateOpen
+		callback = cb.onStateChange
+	}
+	cb.mu.Unlock()
+	if callback != nil {
+		callback(from, "open")
 	}
 }
 
-// State returns the current state name (for logging/metrics).
-func (cb *CircuitBreaker) State() string {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
+// stateName returns the string name of the current state.
+// Must be called with cb.mu held.
+func (cb *CircuitBreaker) stateName() string {
 	switch cb.state {
 	case stateClosed:
 		return "closed"
@@ -92,4 +119,11 @@ func (cb *CircuitBreaker) State() string {
 	default:
 		return "unknown"
 	}
+}
+
+// State returns the current state name (for logging/metrics).
+func (cb *CircuitBreaker) State() string {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.stateName()
 }

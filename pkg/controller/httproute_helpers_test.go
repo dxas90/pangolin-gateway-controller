@@ -570,7 +570,9 @@ func TestCreatePangolinResourceForHostname_NoDomainMatch(t *testing.T) {
 	log := ctrl.Log.WithName("test")
 	ctx := context.Background()
 
-	// No matching domains - should fall back to hostname as subdomain
+	// When domains are non-empty but no domain matches, return an error (don't silently fall back).
+	// This is the correct behavior: if the caller provided real domain data, a non-matching
+	// hostname is likely misconfigured and should not be silently routed to a placeholder domain.
 	domains := []map[string]interface{}{
 		{"baseDomain": "other.com", "domainId": "dom-1"},
 	}
@@ -580,13 +582,12 @@ func TestCreatePangolinResourceForHostname_NoDomainMatch(t *testing.T) {
 		Spec:       gatewayv1.HTTPRouteSpec{},
 	}
 
-	mockClient.On("CreateResource", ctx, mock.AnythingOfType("map[string]interface {}")).Return(map[string]interface{}{
-		"resourceId": "res-fallback",
-	}, nil)
-
 	id, err := r.createPangolinResourceForHostname(ctx, route, "app.example.com", "app.example.com", domains, log)
-	assert.NoError(t, err)
-	assert.Equal(t, "res-fallback", id)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match any configured Pangolin domain")
+	assert.Empty(t, id)
+	// No CreateResource call should have been made
+	mockClient.AssertNotCalled(t, "CreateResource")
 }
 
 func TestCreatePangolinResourceForHostname_WithHeaders(t *testing.T) {

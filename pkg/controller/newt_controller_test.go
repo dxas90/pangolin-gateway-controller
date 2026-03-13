@@ -158,10 +158,8 @@ func (s *NewtControllerTestSuite) TestReconcile_NoCredentialsSecret() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Equal(10*time.Second, result.RequeueAfter)
 }
-
-// TestReconcile_WithCredentials tests full newt deployment creation.
 func (s *NewtControllerTestSuite) TestReconcile_WithCredentials() {
 	gateway := testutil.NewTestGateway("newt-full", s.testNamespace)
 	gateway.Labels = map[string]string{

@@ -117,7 +117,6 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			metrics.ReconcileTotal.WithLabelValues("gateway", "error").Inc()
 		} else {
 			metrics.ReconcileTotal.WithLabelValues("gateway", "deleted").Inc()
-			metrics.GatewayTotal.WithLabelValues(gateway.Namespace).Set(0)
 		}
 		return result, err
 	}
@@ -163,8 +162,13 @@ func (r *GatewayReconciler) handleDelete(ctx context.Context, gateway *gatewayv1
 		} else {
 			// Delete the site from Pangolin
 			if err := r.PangolinClient.DeleteSite(ctx, siteID); err != nil {
-				log.Error(err, "Failed to delete site from Pangolin", "siteID", siteID)
-				// Continue anyway, the site might already be deleted
+				// If already deleted (404), proceed with finalizer removal
+				if apiErr, ok := pangolin.AsPangolinAPIError(err); ok && apiErr.StatusCode == 404 {
+					log.Info("Site already deleted in Pangolin (404), continuing with finalizer removal", "siteID", siteID)
+				} else {
+					log.Error(err, "Failed to delete site from Pangolin, will retry", "siteID", siteID)
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
 			} else {
 				log.Info("Deleted site from Pangolin", "siteID", siteID)
 			}
@@ -177,6 +181,12 @@ func (r *GatewayReconciler) handleDelete(ctx context.Context, gateway *gatewayv1
 	if err := r.Patch(ctx, gateway, client.MergeFrom(original)); err != nil {
 		log.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
+	}
+
+	// Update GatewayTotal metric with accurate remaining count in this namespace
+	var remainingGateways gatewayv1.GatewayList
+	if listErr := r.List(ctx, &remainingGateways, client.InNamespace(gateway.Namespace)); listErr == nil {
+		metrics.GatewayTotal.WithLabelValues(gateway.Namespace).Set(float64(len(remainingGateways.Items)))
 	}
 
 	return ctrl.Result{}, nil
@@ -194,7 +204,7 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 		site, err := r.ensureSite(ctx, gateway, log)
 		if err != nil {
 			log.Error(err, "Failed to ensure site")
-			r.updateGatewayStatus(ctx, gateway, gatewayv1.GatewayConditionProgrammed, false, "SiteError", err.Error())
+			r.updateGatewayStatus(ctx, gateway, gatewayv1.GatewayConditionProgrammed, false, "SiteError", sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 
@@ -237,7 +247,7 @@ func (r *GatewayReconciler) reconcileGateway(ctx context.Context, gateway *gatew
 		// Verify site still exists in Pangolin, recreate if deleted
 		if err := r.verifyOrRecreateSite(ctx, gateway, siteID, log); err != nil {
 			log.Error(err, "Failed to verify/recreate site")
-			r.updateGatewayStatus(ctx, gateway, gatewayv1.GatewayConditionProgrammed, false, "SiteVerificationFailed", err.Error())
+			r.updateGatewayStatus(ctx, gateway, gatewayv1.GatewayConditionProgrammed, false, "SiteVerificationFailed", sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 	}
@@ -265,6 +275,8 @@ func (r *GatewayReconciler) ensureSite(ctx context.Context, gateway *gatewayv1.G
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sites: %w", err)
 	}
+	// Update PangolinSites gauge with current count
+	metrics.PangolinSites.WithLabelValues("all").Set(float64(len(sites)))
 
 	// Look for existing site for this gateway
 	siteName := fmt.Sprintf("pgc-%s", gateway.Name)
@@ -304,7 +316,7 @@ func (r *GatewayReconciler) ensureSite(ctx context.Context, gateway *gatewayv1.G
 	createdSite.NewtID = site.NewtID
 	createdSite.Secret = site.Secret
 
-	log.V(1).Info("Created new Pangolin site", "siteID", createdSite.ID, "siteName", siteName, "newtID", createdSite.NewtID)
+	log.V(1).Info("Created new Pangolin site", "siteID", createdSite.ID, "siteName", siteName)
 	return createdSite, nil
 }
 

@@ -352,5 +352,75 @@ func TestGRPCRoute_VerifyOrRecreateResource_NumericID(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+// --- nil Port backend skip ---
+
+// TestReconcileTargets_NilPortBackendSkipped verifies that a backend with a nil
+// Port is silently skipped and does not cause a panic or return an error.
+// The test uses a single-rule GRPCRoute where the only BackendRef has Port=nil,
+// so reconcileTargets should return an error ("no backend services found")
+// rather than panicking.
+func TestReconcileTargets_NilPortBackendSkipped(t *testing.T) {
+	mockClient := new(internalMockPangolin)
+	scheme := makeGatewayTestScheme()
+
+	// Build a minimal Service so the lookup doesn't fire — but since Port is nil
+	// the backend is skipped before any Get call is made.
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nil-port-svc",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.1",
+		},
+	}
+
+	fakeK8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(svc).
+		Build()
+
+	r := &GRPCRouteReconciler{
+		Client:         fakeK8s,
+		PangolinClient: mockClient,
+		Scheme:         scheme,
+		Config:         &config.ControllerConfig{},
+		Log:            ctrl.Log.WithName("test"),
+	}
+	ctx := context.Background()
+
+	route := &gatewayv1.GRPCRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nil-port-route",
+			Namespace: "default",
+		},
+		Spec: gatewayv1.GRPCRouteSpec{
+			Rules: []gatewayv1.GRPCRouteRule{
+				{
+					BackendRefs: []gatewayv1.GRPCBackendRef{
+						{
+							BackendRef: gatewayv1.BackendRef{
+								BackendObjectReference: gatewayv1.BackendObjectReference{
+									Name: "nil-port-svc",
+									Port: nil, // intentionally nil
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// reconcileTargets must not panic and must return an error because all
+	// backends were skipped and there are none left to process.
+	err := r.reconcileTargets(ctx, route, "res-nil-port", "12345", nil, ctrl.Log.WithName("test"))
+	assert.Error(t, err, "should error when all backends are skipped due to nil port")
+	assert.Contains(t, err.Error(), "no backend services found")
+
+	// No Pangolin API calls should be made
+	mockClient.AssertExpectations(t)
+}
+
 var _ = fmt.Sprintf // ensure fmt import
 var _ corev1.Pod    // ensure corev1 import

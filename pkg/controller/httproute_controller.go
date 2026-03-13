@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
+	"github.com/dxas90/pangolin-gateway-controller/pkg/metrics"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -34,8 +35,15 @@ type HTTPRouteReconciler struct {
 
 // Reconcile implements the reconciliation logic for HTTPRoute resources
 func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	startTime := time.Now()
 	log := r.Log.WithValues("httproute", req.NamespacedName)
 	log.Info("Reconciling HTTPRoute")
+
+	// Track reconciliation duration
+	defer func() {
+		duration := time.Since(startTime).Seconds()
+		metrics.ReconcileDuration.WithLabelValues("httproute").Observe(duration)
+	}()
 
 	ctx, cancel := context.WithTimeout(ctx, ReconcileTimeout)
 	defer cancel()
@@ -44,14 +52,22 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, req.NamespacedName, route); err != nil {
 		if errors.IsNotFound(err) {
 			log.V(1).Info("HTTPRoute resource not found, likely deleted")
+			metrics.ReconcileTotal.WithLabelValues("httproute", "not_found").Inc()
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Failed to get HTTPRoute")
+		metrics.ReconcileTotal.WithLabelValues("httproute", "error").Inc()
 		return ctrl.Result{}, err
 	}
 
 	if !route.ObjectMeta.DeletionTimestamp.IsZero() {
-		return r.handleDelete(ctx, route, log)
+		result, err := r.handleDelete(ctx, route, log)
+		if err != nil {
+			metrics.ReconcileTotal.WithLabelValues("httproute", "error").Inc()
+		} else {
+			metrics.ReconcileTotal.WithLabelValues("httproute", "deleted").Inc()
+		}
+		return result, err
 	}
 
 	if !controllerutil.ContainsFinalizer(route, FinalizerName) {
@@ -59,11 +75,20 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		controllerutil.AddFinalizer(route, FinalizerName)
 		if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to add finalizer")
+			metrics.ReconcileTotal.WithLabelValues("httproute", "error").Inc()
 			return ctrl.Result{}, err
 		}
 	}
 
-	return r.reconcileHTTPRoute(ctx, route, log)
+	result, err := r.reconcileHTTPRoute(ctx, route, log)
+	if err != nil {
+		metrics.ReconcileTotal.WithLabelValues("httproute", "error").Inc()
+	} else if result.Requeue || result.RequeueAfter > 0 {
+		metrics.ReconcileTotal.WithLabelValues("httproute", "requeue").Inc()
+	} else {
+		metrics.ReconcileTotal.WithLabelValues("httproute", "success").Inc()
+	}
+	return result, err
 }
 
 // handleDelete handles the deletion of an HTTPRoute resource.
@@ -76,6 +101,21 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 
 	log.Info("Deleting HTTPRoute targets from Pangolin")
 
+	// Fetch all resources once before the loop to avoid an N+1 ListResources call.
+	allResources, err := r.PangolinClient.ListResources(ctx)
+	if err != nil {
+		log.Error(err, "Failed to list Pangolin resources for deletion cleanup")
+		// Continue with an empty map — don't block deletion entirely.
+	}
+	resourcesByName := make(map[string]string)
+	for _, res := range allResources {
+		if name, ok := res["name"].(string); ok {
+			if id := fmt.Sprintf("%v", res["resourceId"]); id != "" && id != "<nil>" {
+				resourcesByName[name] = id
+			}
+		}
+	}
+
 	var deletionErrors []error
 
 	for _, hostname := range route.Spec.Hostnames {
@@ -85,8 +125,8 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 		default:
 		}
 
-		resourceID, err := r.findExistingResourceBySubdomainAPI(ctx, string(hostname), log)
-		if err != nil || resourceID == "" {
+		resourceID := resourcesByName[string(hostname)]
+		if resourceID == "" {
 			log.Info("Resource not found, skipping target deletion", "hostname", hostname)
 			continue
 		}
@@ -219,6 +259,15 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to list resources: %w", err)
 	}
+	// Update gauge with current total Pangolin resources
+	metrics.PangolinResources.Set(float64(len(allResources)))
+
+	// Update gauge with current HTTPRoute count in this namespace
+	var routeList gatewayv1.HTTPRouteList
+	if listErr := r.List(ctx, &routeList, client.InNamespace(route.Namespace)); listErr == nil {
+		metrics.HTTPRouteTotal.WithLabelValues(route.Namespace).Set(float64(len(routeList.Items)))
+	}
+
 	resourcesByName := make(map[string]string)
 	for _, res := range allResources {
 		if name, ok := res["name"].(string); ok {
@@ -243,7 +292,7 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 			newResourceID, err := r.createPangolinResourceForHostname(ctx, route, string(hostname), resourceName, domains, log)
 			if err != nil {
 				log.Error(err, "Failed to create Pangolin resource", "hostname", hostname)
-				r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", err.Error())
+				r.updateRouteStatus(ctx, route, false, "ResourceCreationFailed", sanitizeEventMessage(err))
 				r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed", "Failed to create Pangolin resource for hostname %s: %s", hostname, sanitizeEventMessage(err))
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
@@ -261,7 +310,7 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 
 		if err := r.reconcileTargets(ctx, route, resourceID, siteIDStr, log); err != nil {
 			log.Error(err, "Failed to reconcile targets", "resourceID", resourceID, "hostname", hostname)
-			r.updateRouteStatus(ctx, route, false, "TargetError", err.Error())
+			r.updateRouteStatus(ctx, route, false, "TargetError", sanitizeEventMessage(err))
 			r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets for hostname %s: %s", hostname, sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}

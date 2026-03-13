@@ -85,6 +85,7 @@ func (s *IntegrationTestSuite) SetupTest() {
 		Config:          cfg,
 		NewtImage:       controller.NewtImage,
 		ControllerClass: testutil.TestGatewayClass,
+		Recorder:        s.eventRecorder,
 	}
 
 	s.httpRouteReconciler = &controller.HTTPRouteReconciler{
@@ -416,8 +417,8 @@ func (s *IntegrationTestSuite) TestEndToEnd_GRPCRouteReconciliation() {
 	// Setup mock expectations
 	domains := []map[string]interface{}{
 		{
-			"name":     "example.com",
-			"domainId": "domain1",
+			"baseDomain": "example.com",
+			"domainId":   "domain1",
 		},
 	}
 
