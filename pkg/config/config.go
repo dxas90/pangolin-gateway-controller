@@ -217,6 +217,17 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("controller.gatewayClassName is required")
 	}
 
+	// Validate rate limiter configuration
+	if c.Controller.RateLimiterBaseDelay < 0 {
+		return fmt.Errorf("controller.rateLimiterBaseDelay must be >= 0, got %v", c.Controller.RateLimiterBaseDelay)
+	}
+	if c.Controller.RateLimiterMaxDelay < 0 {
+		return fmt.Errorf("controller.rateLimiterMaxDelay must be >= 0, got %v", c.Controller.RateLimiterMaxDelay)
+	}
+	if c.Controller.RateLimiterMaxDelay > 0 && c.Controller.RateLimiterBaseDelay > c.Controller.RateLimiterMaxDelay {
+		return fmt.Errorf("controller.rateLimiterMaxDelay (%v) must be >= rateLimiterBaseDelay (%v)", c.Controller.RateLimiterMaxDelay, c.Controller.RateLimiterBaseDelay)
+	}
+
 	// Validate log level
 	validLevels := map[string]bool{
 		"debug": true,

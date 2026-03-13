@@ -124,6 +124,7 @@ func main() {
 		Scheme:          mgr.GetScheme(),
 		PangolinClient:  pangolinClient,
 		ControllerClass: cfg.Controller.GatewayClassName,
+		NewtEndpoint:    cfg.Controller.NewtEndpoint,
 		Config:          &cfg.Controller,
 		Recorder:        mgr.GetEventRecorderFor("gateway-controller"),
 	}).SetupWithManager(mgr); err != nil {

@@ -58,6 +58,7 @@ type GatewayReconciler struct {
 	Scheme          *runtime.Scheme
 	PangolinClient  pangolin.ClientInterface
 	ControllerClass string
+	NewtEndpoint    string
 	Config          *config.ControllerConfig
 	Recorder        record.EventRecorder
 }
@@ -399,8 +400,9 @@ func (r *GatewayReconciler) createNewtCredentialsSecret(ctx context.Context, gat
 			},
 		},
 		StringData: map[string]string{
-			"NEWT_ID":     site.NewtID,
-			"NEWT_SECRET": site.Secret,
+			"PANGOLIN_ENDPOINT": r.NewtEndpoint,
+			"NEWT_ID":           site.NewtID,
+			"NEWT_SECRET":       site.Secret,
 		},
 	}
 
@@ -444,6 +446,13 @@ func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *ga
 		if condStatus {
 			condition.Status = metav1.ConditionTrue
 		}
+		// Preserve LastTransitionTime if status hasn't changed
+		for _, existing := range current.Status.Conditions {
+			if existing.Type == condition.Type && existing.Status == condition.Status {
+				condition.LastTransitionTime = existing.LastTransitionTime
+				break
+			}
+		}
 		found := false
 		for i, cond := range current.Status.Conditions {
 			if cond.Type == condition.Type {
@@ -468,7 +477,12 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-site").
-		For(&gatewayv1.Gateway{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&gatewayv1.Gateway{}, builder.WithPredicates(
+			predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.LabelChangedPredicate{},
+			),
+		)).
 		Owns(&corev1.Secret{}).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: r.Config.MaxConcurrentReconciles,

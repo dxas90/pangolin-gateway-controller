@@ -5,6 +5,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
@@ -87,6 +88,11 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
+	// Skip reconciliation for gateways being deleted
+	if !gateway.ObjectMeta.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
 	// Check if gateway has a site ID
 	siteID := gateway.Labels[SiteIDLabel]
 	if siteID == "" {
@@ -99,8 +105,8 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: gateway.Namespace, Name: secretName}, secret); err != nil {
 		if errors.IsNotFound(err) {
-			log.Info("Newt credentials secret not found yet, skipping newt deployment")
-			return ctrl.Result{}, nil
+			log.Info("Newt credentials secret not found yet, will retry")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 		log.Error(err, "Failed to get newt credentials secret")
 		return ctrl.Result{}, err
@@ -129,17 +135,6 @@ func (r *NewtReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 //
 // All resources are owned by the Gateway and will be deleted when the Gateway is deleted.
 func (r *NewtReconciler) ensureNewtDeployment(ctx context.Context, gateway *gatewayv1.Gateway, site *pangolin.Site, log logr.Logger) error {
-	// Create secret with newt credentials
-	secret := r.buildNewtSecret(gateway, site)
-	secret.APIVersion = "v1"
-	secret.Kind = "Secret"
-	if err := controllerutil.SetControllerReference(gateway, secret, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner on newt secret: %w", err)
-	}
-	if err := r.applyResource(ctx, secret); err != nil {
-		return fmt.Errorf("failed to apply newt secret: %w", err)
-	}
-
 	// Create deployment
 	deployment := r.buildNewtDeployment(gateway, site)
 	deployment.APIVersion = "apps/v1"
@@ -164,31 +159,6 @@ func (r *NewtReconciler) ensureNewtDeployment(ctx context.Context, gateway *gate
 
 	log.Info("Newt deployment ensured", "siteID", site.ID, "deployment", deployment.Name)
 	return nil
-}
-
-// buildNewtSecret creates a Secret manifest with newt VPN credentials.
-// The Secret contains environment variables that the newt container needs
-// to authenticate with the Pangolin API and establish the VPN tunnel.
-func (r *NewtReconciler) buildNewtSecret(gateway *gatewayv1.Gateway, site *pangolin.Site) *corev1.Secret {
-	secretName := fmt.Sprintf("%s-newt-cred", gateway.Name)
-
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: gateway.Namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":       "newt",
-				"app.kubernetes.io/instance":   gateway.Name,
-				"app.kubernetes.io/managed-by": "pangolin-gateway-controller",
-				NewtSecretLabel:                gateway.Name,
-			},
-		},
-		StringData: map[string]string{
-			"PANGOLIN_ENDPOINT": r.NewtEndpoint,
-			"NEWT_ID":           site.NewtID,
-			"NEWT_SECRET":       site.Secret,
-		},
-	}
 }
 
 // buildNewtDeployment creates a Deployment manifest for the newt VPN instance.

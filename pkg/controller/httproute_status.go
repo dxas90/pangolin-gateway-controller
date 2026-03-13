@@ -32,6 +32,18 @@ func (r *HTTPRouteReconciler) updateRouteStatus(ctx context.Context, route *gate
 		if accepted {
 			condition.Status = metav1.ConditionTrue
 		}
+		// Preserve LastTransitionTime if status hasn't changed for this parent
+		for _, ps := range current.Status.Parents {
+			if ps.ParentRef.Name == parentRef.Name {
+				for _, existing := range ps.Conditions {
+					if existing.Type == condition.Type && existing.Status == condition.Status {
+						condition.LastTransitionTime = existing.LastTransitionTime
+						break
+					}
+				}
+				break
+			}
+		}
 		newParent := gatewayv1.RouteParentStatus{
 			ParentRef:      parentRef,
 			ControllerName: gatewayv1.GatewayController(ControllerName),

@@ -86,9 +86,17 @@ func (r *GRPCRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 	if resourceID != "" {
 		log.Info("Deleting Pangolin resource", "resourceID", resourceID)
 		if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
-			log.Error(err, "Failed to delete resource from Pangolin", "resourceID", resourceID)
-			// Continue with finalizer removal even if deletion fails
-			// (resource might already be deleted)
+			// If the resource is already gone (404), continue with finalizer removal
+			// Otherwise, retry deletion before removing the finalizer
+			removeFinalizer := false
+			if apiErr, ok := pangolin.AsPangolinAPIError(err); ok && apiErr.StatusCode == 404 {
+				log.Info("Resource already deleted in Pangolin (404), continuing with finalizer removal", "resourceID", resourceID)
+				removeFinalizer = true
+			}
+			if !removeFinalizer {
+				log.Error(err, "Failed to delete resource from Pangolin, will retry", "resourceID", resourceID)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
 		} else {
 			log.Info("Successfully deleted Pangolin resource", "resourceID", resourceID)
 		}
@@ -259,25 +267,36 @@ func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	default:
 	}
 
-	// Collect all unique backends from all rules
-	backendMap := make(map[string]gatewayv1.BackendRef)
+	// Collect all unique backends from all rules (ordered, deterministic)
+	type orderedBackend struct {
+		key        string
+		backendRef gatewayv1.BackendRef
+	}
+	var backends []orderedBackend
+	seenKeys := make(map[string]bool)
 
 	for _, rule := range route.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
+			if backendRef.Port == nil {
+				log.Error(nil, "BackendRef missing required Port, skipping backend", "service", string(backendRef.Name))
+				continue
+			}
 			key := fmt.Sprintf("%s:%d", string(backendRef.Name), *backendRef.Port)
-			backendMap[key] = backendRef.BackendRef
+			if !seenKeys[key] {
+				seenKeys[key] = true
+				backends = append(backends, orderedBackend{key: key, backendRef: backendRef.BackendRef})
+			}
 		}
 	}
 
-	if len(backendMap) == 0 {
+	if len(backends) == 0 {
 		return fmt.Errorf("no backend services found in GRPCRoute")
 	}
 
 	// Get existing targets from Pangolin
 	existingTargets, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
 	if err != nil {
-		log.Error(err, "Failed to list existing targets, will attempt to create anyway")
-		existingTargets = []map[string]interface{}{} // Continue with empty list
+		return fmt.Errorf("failed to list existing targets for resource %s: %w", resourceID, err)
 	}
 
 	// Parse siteID once
@@ -287,7 +306,9 @@ func (r *GRPCRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 	}
 
 	// Get Service ClusterIP for each backend
-	for key, backendRef := range backendMap {
+	for _, backend := range backends {
+		key := backend.key
+		backendRef := backend.backendRef
 		// Check for context cancellation in loop
 		select {
 		case <-ctx.Done():
@@ -379,11 +400,16 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 		hostname := string(route.Spec.Hostnames[0])
 
 		// Use the shared extractSubdomainFromDomains helper with baseDomain field
-		if sub, id, err := extractSubdomainFromDomains(hostname, domains); err == nil {
+		sub, id, err := extractSubdomainFromDomains(hostname, domains)
+		if err == nil {
 			subdomain = sub
 			domainID = id
 			log.Info("Matched hostname to domain", "hostname", hostname, "subdomain", subdomain, "domainID", domainID)
+		} else if len(domains) > 0 {
+			// ListDomains succeeded but no domain matches this hostname
+			return "", fmt.Errorf("hostname %s does not match any configured Pangolin domain: %w", hostname, err)
 		}
+		// If domains is empty, keep the default fallback (subdomain=namespace-name, domainID="domain1")
 	}
 
 	// Check annotations for protocol override (tcp or udp)

@@ -657,7 +657,9 @@ func TestGetSite_Success(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Contains(t, r.URL.Path, "/site/s-1")
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"siteId": 1, "name": "my-site", "online": true,
+			"data": map[string]interface{}{
+				"siteId": 1, "name": "my-site", "online": true,
+			},
 		})
 	}))
 	defer srv.Close()

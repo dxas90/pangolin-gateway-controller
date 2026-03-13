@@ -27,8 +27,7 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 
 	existingTargets, err := r.PangolinClient.ListTargetsRaw(ctx, resourceID)
 	if err != nil {
-		log.V(1).Info("Failed to list existing targets, will attempt to create anyway", "error", err.Error())
-		existingTargets = []map[string]interface{}{}
+		return fmt.Errorf("failed to list existing targets for resource %s: %w", resourceID, err)
 	}
 
 	// Track which existing targets are still needed (to identify orphans)
@@ -87,6 +86,10 @@ func (r *HTTPRouteReconciler) reconcileTargets(ctx context.Context, route *gatew
 				return fmt.Errorf("service %s has no ClusterIP", serviceName)
 			}
 
+			if backendRef.Port == nil {
+				log.Error(nil, "BackendRef missing required Port, skipping backend", "service", serviceName, "ruleIndex", ruleIdx, "backendIndex", backendIdx)
+				continue
+			}
 			port := int(*backendRef.Port)
 
 			// Priority: weight overrides rule+backend order

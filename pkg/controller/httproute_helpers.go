@@ -95,9 +95,14 @@ func (r *HTTPRouteReconciler) findExistingResourceBySubdomainAPI(ctx context.Con
 func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Context, route *gatewayv1.HTTPRoute, hostname, resourceName string, domains []map[string]interface{}, log logr.Logger) (string, error) {
 	subdomain, domainID, err := extractSubdomainFromDomains(hostname, domains)
 	if err != nil {
+		if len(domains) > 0 {
+			// ListDomains succeeded but no domain matches this hostname
+			return "", fmt.Errorf("hostname %s does not match any configured Pangolin domain: %w", hostname, err)
+		}
+		// ListDomains returned empty list (possible API failure upstream) — use safe fallback
 		subdomain = hostname
 		domainID = "domain1"
-		log.V(1).Info("No domain match found, using hostname as subdomain", "hostname", hostname)
+		log.V(1).Info("No domains available, using hostname as subdomain fallback", "hostname", hostname)
 	} else {
 		log.V(1).Info("Matched hostname to domain", "hostname", hostname, "subdomain", subdomain, "domainID", domainID)
 	}

@@ -55,6 +55,14 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		Message:            "GatewayClass accepted by Pangolin Gateway Controller",
 	}
 
+	// Preserve LastTransitionTime if status hasn't changed
+	for _, existing := range gatewayClass.Status.Conditions {
+		if existing.Type == acceptedCondition.Type && existing.Status == acceptedCondition.Status {
+			acceptedCondition.LastTransitionTime = existing.LastTransitionTime
+			break
+		}
+	}
+
 	// Check if condition already exists and is up to date; append or update in a single pass
 	needsUpdate := true
 	found := false

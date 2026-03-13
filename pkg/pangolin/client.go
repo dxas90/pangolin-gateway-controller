@@ -381,12 +381,15 @@ func (c *Client) GetSite(ctx context.Context, siteID string) (*Site, error) {
 		return nil, err
 	}
 
-	var result Site
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	// API returns {"data": {...}}
+	var response struct {
+		Data Site `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	return &result, nil
+	return &response.Data, nil
 }
 
 // ListSites lists all sites for the organization, transparently paginating
@@ -540,26 +543,63 @@ func (c *Client) DisableSSO(ctx context.Context, resourceID string) error {
 	return err
 }
 
-// ListDomains lists all domains for the organization
+// ListDomains lists all domains for the organization, transparently paginating
+// through all pages. Uses the same pagination approach as ListSites/ListResources.
 // Endpoint: GET /org/{orgId}/domains
 func (c *Client) ListDomains(ctx context.Context) ([]map[string]interface{}, error) {
-	path := fmt.Sprintf("/org/%s/domains", c.OrgID)
-	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// API returns {"data": {"domains": [...]}}
-	var response struct {
+	type paginatedResponse struct {
 		Data struct {
-			Domains []map[string]interface{} `json:"domains"`
+			Domains    []map[string]interface{} `json:"domains"`
+			Pagination struct {
+				Total    int `json:"total"`
+				PageSize int `json:"pageSize"`
+				Page     int `json:"page"`
+				// Legacy fields (Pangolin < 1.16.0)
+				Limit  int `json:"limit"`
+				Offset int `json:"offset"`
+			} `json:"pagination"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+
+	var allDomains []map[string]interface{}
+	basePath := fmt.Sprintf("/org/%s/domains", c.OrgID)
+
+	for page := 1; page <= listMaxPages; page++ {
+		path := fmt.Sprintf("%s?pageSize=%d&page=%d", basePath, listPageSize, page)
+		respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var resp paginatedResponse
+		if err := json.Unmarshal(respBody, &resp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal list domains response (page %d): %w", page, err)
+		}
+
+		allDomains = append(allDomains, resp.Data.Domains...)
+
+		// Determine the effective page size — newer API returns pageSize,
+		// older API returns limit; fall back to listPageSize if both are zero.
+		effPageSize := resp.Data.Pagination.PageSize
+		if effPageSize == 0 {
+			effPageSize = resp.Data.Pagination.Limit
+		}
+		if effPageSize == 0 {
+			effPageSize = listPageSize
+		}
+
+		// Stop when we've collected all items or the page came back empty.
+		if len(resp.Data.Domains) == 0 || len(allDomains) >= resp.Data.Pagination.Total {
+			break
+		}
+		// Also stop if the server returned fewer items than requested
+		// (last page).
+		if len(resp.Data.Domains) < effPageSize {
+			break
+		}
 	}
 
-	return response.Data.Domains, nil
+	return allDomains, nil
 }
 
 // ListResources lists all resources for the organization, transparently
@@ -624,26 +664,67 @@ func (c *Client) ListResources(ctx context.Context) ([]map[string]interface{}, e
 	return allResources, nil
 }
 
-// ListTargetsRaw lists all targets for a resource via Integration API
+// ListTargetsRaw lists all targets for a resource via Integration API,
+// transparently paginating through all pages.
 // Endpoint: GET /resource/{resourceId}/targets
+//
+// IMPORTANT: Callers MUST NOT continue with an empty slice when this method
+// returns an error. Doing so silently drops all existing targets and can lead
+// to incorrect drift-detection or accidental deletion of Pangolin targets.
 func (c *Client) ListTargetsRaw(ctx context.Context, resourceID string) ([]map[string]interface{}, error) {
-	path := fmt.Sprintf("/resource/%s/targets", resourceID)
-	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// API returns {"data": {"targets": [...]}}
-	var response struct {
+	type paginatedResponse struct {
 		Data struct {
-			Targets []map[string]interface{} `json:"targets"`
+			Targets    []map[string]interface{} `json:"targets"`
+			Pagination struct {
+				Total    int `json:"total"`
+				PageSize int `json:"pageSize"`
+				Page     int `json:"page"`
+				// Legacy fields (Pangolin < 1.16.0)
+				Limit  int `json:"limit"`
+				Offset int `json:"offset"`
+			} `json:"pagination"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+
+	var allTargets []map[string]interface{}
+	basePath := fmt.Sprintf("/resource/%s/targets", resourceID)
+
+	for page := 1; page <= listMaxPages; page++ {
+		path := fmt.Sprintf("%s?pageSize=%d&page=%d", basePath, listPageSize, page)
+		respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var resp paginatedResponse
+		if err := json.Unmarshal(respBody, &resp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal list targets response (page %d): %w", page, err)
+		}
+
+		allTargets = append(allTargets, resp.Data.Targets...)
+
+		// Determine the effective page size — newer API returns pageSize,
+		// older API returns limit; fall back to listPageSize if both are zero.
+		effPageSize := resp.Data.Pagination.PageSize
+		if effPageSize == 0 {
+			effPageSize = resp.Data.Pagination.Limit
+		}
+		if effPageSize == 0 {
+			effPageSize = listPageSize
+		}
+
+		// Stop when we've collected all items or the page came back empty.
+		if len(resp.Data.Targets) == 0 || len(allTargets) >= resp.Data.Pagination.Total {
+			break
+		}
+		// Also stop if the server returned fewer items than requested
+		// (last page).
+		if len(resp.Data.Targets) < effPageSize {
+			break
+		}
 	}
 
-	return response.Data.Targets, nil
+	return allTargets, nil
 }
 
 // GetServerVersion queries the Pangolin server version by performing the same

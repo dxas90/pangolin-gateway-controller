@@ -76,6 +76,8 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 
 	log.Info("Deleting HTTPRoute targets from Pangolin")
 
+	var deletionErrors []error
+
 	for _, hostname := range route.Spec.Hostnames {
 		select {
 		case <-ctx.Done():
@@ -135,6 +137,7 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 			if err := r.PangolinClient.DeleteTarget(ctx, targetID); err != nil {
 				log.Error(err, "Failed to delete target", "targetId", targetID)
 				remainingTargets = append(remainingTargets, target)
+				deletionErrors = append(deletionErrors, fmt.Errorf("target %s: %w", targetID, err))
 			}
 		}
 
@@ -145,10 +148,16 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 			log.Info("No targets remain, deleting resource", "resourceID", resourceID, "hostname", hostname)
 			if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
 				log.Error(err, "Failed to delete resource", "resourceID", resourceID)
+				deletionErrors = append(deletionErrors, fmt.Errorf("resource %s: %w", resourceID, err))
 			} else {
 				log.Info("Successfully deleted resource", "resourceID", resourceID)
 			}
 		}
+	}
+
+	if len(deletionErrors) > 0 {
+		log.Info("Some Pangolin resources could not be deleted, will retry", "errorCount", len(deletionErrors))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, fmt.Errorf("failed to delete %d Pangolin resource(s), will retry", len(deletionErrors))
 	}
 
 	original := route.DeepCopy()
