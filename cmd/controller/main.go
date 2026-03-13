@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	"github.com/dxas90/pangolin-gateway-controller/pkg/config"
 	pgctrl "github.com/dxas90/pangolin-gateway-controller/pkg/controller"
@@ -81,6 +82,10 @@ func main() {
 	}
 
 	// Setup manager
+	// SyncPeriod forces a full re-list of all watched objects at this interval,
+	// ensuring Pangolin-side drift (deleted resources/targets/sites) is detected
+	// and corrected even when no Kubernetes events are firing.
+	syncPeriod := 10 * time.Minute
 	mgrOpts := ctrl.Options{
 		Scheme:                  scheme,
 		Metrics:                 server.Options{BindAddress: cfg.Controller.MetricsBindAddress},
@@ -88,14 +93,15 @@ func main() {
 		LeaderElection:          cfg.Controller.LeaderElection,
 		LeaderElectionID:        cfg.Controller.LeaderElectionID,
 		LeaderElectionNamespace: cfg.Controller.LeaderElectionNamespace,
+		Cache: cache.Options{
+			SyncPeriod: &syncPeriod,
+		},
 	}
 
-	// Configure namespace watching if specified
+	// Configure namespace watching if specified (preserve SyncPeriod)
 	if cfg.Controller.Namespace != "" {
-		mgrOpts.Cache = cache.Options{
-			DefaultNamespaces: map[string]cache.Config{
-				cfg.Controller.Namespace: {},
-			},
+		mgrOpts.Cache.DefaultNamespaces = map[string]cache.Config{
+			cfg.Controller.Namespace: {},
 		}
 	}
 

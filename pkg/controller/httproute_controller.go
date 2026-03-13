@@ -257,7 +257,7 @@ func (r *HTTPRouteReconciler) reconcileHTTPRoute(ctx context.Context, route *gat
 	if processedHostnames == 0 {
 		log.Info("No hostnames matched Pangolin domains, HTTPRoute has no valid hostnames")
 		r.updateRouteStatus(ctx, route, false, "NoMatchingDomains", "None of the hostnames match Pangolin domains")
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
 	r.updateRouteStatus(ctx, route, true, "Accepted", "HTTPRoute is configured in Pangolin")
