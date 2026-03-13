@@ -1164,10 +1164,10 @@ func TestIsIDSegment(t *testing.T) {
 	}{
 		{"12345", true},
 		{"0", true},
-		{"abcdef01", true},  // hex >= 8 chars
-		{"abc", false},      // hex < 8 chars
-		{"home", false},     // not numeric/hex
-		{"", false},         // empty
+		{"abcdef01", true},    // hex >= 8 chars
+		{"abc", false},        // hex < 8 chars
+		{"home", false},       // not numeric/hex
+		{"", false},           // empty
 		{"abc-def-012", true}, // UUID-like with dashes
 	}
 

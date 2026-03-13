@@ -337,7 +337,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway_SiteDeleted()
 		ClientAddress: "10.0.1.1",
 		NewtID:        "newt-new",
 		NewtSecret:    "secret-new",
-		PublicKey:      "pubkey",
+		PublicKey:     "pubkey",
 		Endpoint:      "https://pangolin.example.com",
 		ListenPort:    51820,
 	}

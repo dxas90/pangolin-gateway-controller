@@ -256,7 +256,7 @@ func TestFindExistingResourceBySubdomainFromMap_NilMap(t *testing.T) {
 func TestFindExistingResourceBySubdomainFromMap_Found(t *testing.T) {
 	r := &HTTPRouteReconciler{}
 	m := map[string]string{
-		"test.example.com": "res-123",
+		"test.example.com":  "res-123",
 		"other.example.com": "res-456",
 	}
 	result := r.findExistingResourceBySubdomainFromMap("test.example.com", m)
