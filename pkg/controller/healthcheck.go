@@ -18,9 +18,9 @@ type pangolinReadyChecker struct {
 }
 
 // NewPangolinReadyChecker returns a readiness check function that verifies
-// connectivity to the Pangolin API by listing sites, with a 30s result cache
-// to avoid hammering the API on every probe. Use this for the /readyz endpoint;
-// keep /healthz as a simple ping.
+// connectivity to the Pangolin API with a lightweight HEAD request, with a 30s
+// result cache to avoid hammering the API on every probe. Use this for the
+// /readyz endpoint; keep /healthz as a simple ping.
 func NewPangolinReadyChecker(client pangolin.ClientInterface) func(*http.Request) error {
 	return (&pangolinReadyChecker{client: client, cacheTTL: 30 * time.Second}).check
 }
@@ -36,7 +36,7 @@ func (p *pangolinReadyChecker) check(req *http.Request) error {
 
 	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
 	defer cancel()
-	_, err := p.client.ListSites(ctx)
+	err := p.client.Ping(ctx)
 
 	p.mu.Lock()
 	p.lastCheck = time.Now()

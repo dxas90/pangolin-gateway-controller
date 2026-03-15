@@ -32,6 +32,12 @@ type ClientInterface interface {
 	// Version detection — queries the Pangolin server version via the newt auth
 	// token endpoint (same mechanism the newt VPN client uses on startup).
 	GetServerVersion(ctx context.Context, newtEndpoint, newtID, newtSecret string) (string, error)
+
+	// Ping checks whether the Pangolin API is reachable without fetching any
+	// data. It performs a HEAD request to the base URL; any HTTP response
+	// (including 4xx) means the server is up. Only connection-level errors
+	// return a non-nil error.
+	Ping(ctx context.Context) error
 }
 
 // Ensure Client implements ClientInterface

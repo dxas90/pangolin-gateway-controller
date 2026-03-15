@@ -132,6 +132,12 @@ func (m *MockPangolinClient) GetServerVersion(ctx context.Context, newtEndpoint,
 	return args.String(0), args.Error(1)
 }
 
+// Ping mocks the Ping method.
+func (m *MockPangolinClient) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 // NewMockPangolinClient creates a new mock Pangolin client.
 func NewMockPangolinClient() *MockPangolinClient {
 	return &MockPangolinClient{}

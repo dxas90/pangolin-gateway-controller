@@ -115,13 +115,25 @@ nodeSelector: {}
 
 # Tolerations
 tolerations: []
-
+  # - key: "node-role.kubernetes.io/master"
+  #   operator: "Exists"
+  #   effect: "NoSchedule"
+  # - key: "node-role.kubernetes.io/control-plane"
+  #   operator: "Exists"
+  #   effect: "NoSchedule"
 # Affinity
 affinity: {}
-
+  # nodeAffinity:
+  #   requiredDuringSchedulingIgnoredDuringExecution:
+  #     nodeSelectorTerms:
+  #     - matchExpressions:
+  #       - key: kubernetes.io/hostname
+  #         operator: In
+  #         values:
+  #         - controller
 # Autoscaling (disabled by default for controllers)
 autoscaling:
-  enabled: false
+  enabled: true
   minReplicas: 1
   maxReplicas: 3
   targetCPUUtilizationPercentage: 80
@@ -135,7 +147,7 @@ persistence:
 
 # PodDisruptionBudget for high availability
 podDisruptionBudget:
-  enabled: false
+  enabled: true
   minAvailable: 1
 
 # ServiceMonitor for Prometheus Operator

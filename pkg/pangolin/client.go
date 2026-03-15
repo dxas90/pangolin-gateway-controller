@@ -757,6 +757,26 @@ func (c *Client) GetServerVersion(ctx context.Context, newtEndpoint, newtID, new
 	return tokenResp.Data.ServerVersion, nil
 }
 
+// Ping checks whether the Pangolin API is reachable without fetching any data.
+// It issues a HEAD request to the base URL; any HTTP response (including 4xx)
+// means the server is up. Only connection-level errors return a non-nil error.
+// The circuit breaker is intentionally bypassed so that a single health probe
+// does not influence the failure counter.
+func (c *Client) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.BaseURL, nil)
+	if err != nil {
+		return fmt.Errorf("ping: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ping: API unreachable: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // normalizePath strips query strings and replaces numeric/UUID-like path
 // segments with {id} to produce stable metric label values.
 // Example: /org/home/sites/12345/resources → /org/{id}/sites/{id}/resources

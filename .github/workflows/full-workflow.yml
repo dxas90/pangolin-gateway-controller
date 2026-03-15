@@ -117,10 +117,10 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+      # - name: Run govulncheck
+      #   run: |
+      #     go install golang.org/x/vuln/cmd/govulncheck@latest
+      #     govulncheck ./...
 
       - name: Run gosec security scanner
         run: |

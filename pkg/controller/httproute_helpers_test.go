@@ -101,6 +101,9 @@ func (m *internalMockPangolin) GetServerVersion(ctx context.Context, newtEndpoin
 	args := m.Called(ctx, newtEndpoint, newtID, newtSecret)
 	return args.String(0), args.Error(1)
 }
+func (m *internalMockPangolin) Ping(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
 
 var _ pangolin.ClientInterface = (*internalMockPangolin)(nil)
 
