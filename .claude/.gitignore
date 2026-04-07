@@ -1,0 +1,22 @@
+# User-specific files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+!scripts/
+
+mcp.json
+settings.local.json
+CLAUDE.local.md
