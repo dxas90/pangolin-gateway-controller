@@ -757,23 +757,38 @@ func (c *Client) GetServerVersion(ctx context.Context, newtEndpoint, newtID, new
 	return tokenResp.Data.ServerVersion, nil
 }
 
-// Ping checks whether the Pangolin API is reachable without fetching any data.
-// It issues a HEAD request to the base URL; any HTTP response (including 4xx)
-// means the server is up. Only connection-level errors return a non-nil error.
-// The circuit breaker is intentionally bypassed so that a single health probe
-// does not influence the failure counter.
+// Ping checks whether the Pangolin API is reachable without fetching data.
+// It first consults the circuit breaker — if the breaker is open the probe is
+// skipped and ErrCircuitOpen is returned so the readiness check aligns with
+// the reconciler's fast-fail state. Otherwise an unauthenticated GET is issued
+// to a known API endpoint; any 1xx–4xx response confirms the server is up; a
+// 5xx response indicates server-side failure. The circuit breaker counters are
+// not updated by Ping so that probes do not interfere with normal operation.
 func (c *Client) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.BaseURL, nil)
-	if err != nil {
-		return fmt.Errorf("ping: failed to create request: %w", err)
+	if c.Breaker != nil {
+		if err := c.Breaker.Allow(); err != nil {
+			return err // ErrCircuitOpen — no point probing the network
+		}
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+
+	// Use a known, versioned endpoint without the Authorization header.
+	// A 401 response still confirms the server is reachable; omitting the
+	// token keeps the credential out of CDN/proxy access logs.
+	target := fmt.Sprintf("%s/org/%s/sites?pageSize=1&page=1", c.BaseURL, c.OrgID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return fmt.Errorf("ping: build request: %w", err)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ping: API unreachable: %w", err)
 	}
 	resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return fmt.Errorf("ping: server error %d", resp.StatusCode)
+	}
 	return nil
 }
 
