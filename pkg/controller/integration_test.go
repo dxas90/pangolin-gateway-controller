@@ -422,11 +422,14 @@ func (s *IntegrationTestSuite) TestEndToEnd_GRPCRouteReconciliation() {
 		},
 	}
 
+	// Pangolin 1.19.2: listResources returns `mode` instead of `http`+`protocol`,
+	// and the `subdomain` column is no longer projected (use fullDomain). Keep `subdomain`
+	// here only because this mock represents the CreateResource RESPONSE (which still
+	// echoes the input), not the listResources projection.
 	resource := map[string]interface{}{
 		"resourceId": "resource-789",
 		"subdomain":  "test-namespace-test-grpcroute",
-		"http":       false,
-		"protocol":   "tcp",
+		"mode":       "tcp",
 	}
 
 	target := map[string]interface{}{
