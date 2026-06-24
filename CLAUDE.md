@@ -95,7 +95,7 @@ make deploy-examples
 4. **GRPCRoute Reconciler** (`pkg/controller/grpcroute_controller.go`)
    - Handles TCP/UDP services
    - Protocol specified via annotation: `gateway.pangolin.net/protocol` (tcp/udp)
-   - Creates Pangolin resources with `http:false`
+   - Creates Pangolin resources with `mode: tcp` or `mode: udp` (1.19.x canonical field)
 
 5. **Pangolin Client** (`pkg/pangolin/client.go`)
    - REST API wrapper for Pangolin Integration API
@@ -242,12 +242,24 @@ curl -H "Authorization: Bearer $PANGOLIN_API_KEY" \
 
 ## Pangolin API Version Compatibility
 
-- **Targeting**: Pangolin 1.16.2 (latest as of March 2026, tag `1.16.2` in `references/pangolin/`)
+- **Targeting**: Pangolin 1.19.2 (verified against tag `1.19.2-37-g963e9da7d` in `references/pangolin/`)
 - **Breaking change in 1.16.0**: `GET /org/{orgId}/sites` and `GET /org/{orgId}/resources` changed pagination:
   - Old (≤1.15.x): `?limit=1000&offset=0` — **default 1000 items**
   - New (1.16.0+): `?pageSize=20&page=1` — **default dropped to 20 items**
   - Fix: client now passes `?pageSize=1000&page=N` and paginates (constants: `listPageSize=1000`, `listMaxPages=100`)
   - Backward-compatible: old servers ignore unknown query params and return their own default
+- **1.19.x resource `mode` field**: `http` and `protocol` on create/update resource bodies are now
+  marked `deprecated: true` in the integration API zod schema. The server still accepts them and
+  translates via `migrateModeFromHttpProtocol()`, but the canonical field is `mode` (one of
+  `http|tcp|udp|ssh|rdp|vnc`). This controller now sends `mode` directly:
+  - HTTPRoute → `"mode": "http"`
+  - GRPCRoute → `"mode": "tcp"` or `"mode": "udp"` (driven by the `gateway.pangolin.net/protocol` annotation)
+- **1.19.x listResources projection**: the `listResources` response no longer includes `http`,
+  `protocol`, or `subdomain` columns — it now exposes `mode`, `fullDomain`, and a richer set of
+  policy-effective fields. The controller only reads `name` and `resourceId` from this list, so the
+  drop is transparent; any future resource-by-subdomain lookups must use `fullDomain` instead.
+- **Target list pagination**: `GET /resource/{id}/targets` still uses `limit`/`offset` (unlike sites/resources),
+  matching the existing Go client.
 
 ## Common Pitfalls
 

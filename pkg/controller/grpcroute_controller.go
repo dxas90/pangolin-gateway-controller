@@ -493,11 +493,12 @@ func (r *GRPCRouteReconciler) createPangolinResource(ctx context.Context, route 
 
 	// Create resource via Integration API
 	// Endpoint: PUT /org/{orgId}/resource
+	// Pangolin 1.19.2: use canonical `mode` ("tcp"/"udp") instead of deprecated `http`+`protocol`.
+	// `protocol` is constrained to "tcp"/"udp" above, which are valid `mode` values for raw resources.
 	resourceData := map[string]interface{}{
 		"name":          fmt.Sprintf("%s-%s", route.Namespace, route.Name),
 		"subdomain":     subdomain,
-		"http":          false, // gRPC/TCP/UDP is not HTTP
-		"protocol":      protocol,
+		"mode":          protocol,
 		"domainId":      domainID,
 		"stickySession": false,
 	}

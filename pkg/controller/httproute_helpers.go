@@ -119,11 +119,13 @@ func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Cont
 		log.V(1).Info("Matched hostname to domain", "hostname", hostname, "subdomain", subdomain, "domainID", domainID)
 	}
 
+	// Pangolin 1.19.2: prefer canonical `mode` over deprecated `http`+`protocol`.
+	// The server still accepts `http`/`protocol` (translated via migrateModeFromHttpProtocol),
+	// but they are marked deprecated in the integration API schema.
 	resourceData := map[string]interface{}{
 		"name":          resourceName,
 		"subdomain":     subdomain,
-		"http":          true,
-		"protocol":      "tcp",
+		"mode":          "http",
 		"domainId":      domainID,
 		"stickySession": false,
 	}
