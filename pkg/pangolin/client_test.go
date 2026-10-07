@@ -181,7 +181,7 @@ func TestListResources_Success(t *testing.T) {
 func TestDeleteResource_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-99")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-99")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -197,7 +197,7 @@ func TestDeleteResource_Success(t *testing.T) {
 func TestCreateTargetRaw_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1/target")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1/target")
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"data": map[string]interface{}{"targetId": "tgt-001"},
 		})
@@ -340,7 +340,7 @@ func TestDisableSSO_Success(t *testing.T) {
 	var gotBody map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -360,7 +360,7 @@ func TestUpdateResource_Success(t *testing.T) {
 	var gotBody map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-42")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-42")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -393,7 +393,7 @@ func TestUpdateResource_Error(t *testing.T) {
 func TestCreateTarget_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1/target")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1/target")
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"data": map[string]interface{}{
 				"id":         "tgt-100",
@@ -445,7 +445,7 @@ func TestCreateTarget_InvalidJSON(t *testing.T) {
 func TestListTargets_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1/targets")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1/targets")
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"data": map[string]interface{}{
 				"targets": []map[string]interface{}{
@@ -494,7 +494,7 @@ func TestListTargets_InvalidJSON(t *testing.T) {
 func TestCreateRule_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1/rule")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1/rule")
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"data": map[string]interface{}{
 				"id":         "rule-1",
@@ -546,7 +546,7 @@ func TestCreateRule_InvalidJSON(t *testing.T) {
 func TestListRules_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1/rules")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1/rules")
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"data": map[string]interface{}{
 				"rules": []map[string]interface{}{
@@ -594,7 +594,7 @@ func TestListRules_InvalidJSON(t *testing.T) {
 func TestDeleteRule_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1/rule/rule-1")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1/rule/rule-1")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -623,7 +623,7 @@ func TestSetResourceRoles_Success(t *testing.T) {
 	var gotBody map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Contains(t, r.URL.Path, "/resource/res-1/roles")
+		assert.Contains(t, r.URL.Path, "/public-resource/res-1/roles")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -1143,10 +1143,10 @@ func TestNormalizePath(t *testing.T) {
 		expected string
 	}{
 		{"/org/home/sites?pageSize=1000&page=1", "/org/home/sites"},
-		{"/resource/12345/targets", "/resource/{id}/targets"},
+		{"/public-resource/12345/targets", "/public-resource/{id}/targets"},
 		{"/site/42", "/site/{id}"},
-		{"/org/home/resources", "/org/home/resources"},
-		{"/resource/abcdef12-3456-7890/target", "/resource/{id}/target"},
+		{"/org/home/public-resources", "/org/home/public-resources"},
+		{"/public-resource/abcdef12-3456-7890/target", "/public-resource/{id}/target"},
 		{"", ""},
 	}
 

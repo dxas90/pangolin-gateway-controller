@@ -91,6 +91,9 @@ type SiteResource struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	Status      string            `json:"status,omitempty"`
 	HealthCheck *HealthCheck      `json:"healthCheck,omitempty"`
+	// ResponseHeaders allows setting custom response headers on the resource.
+	// Added in Pangolin 1.24.0.
+	ResponseHeaders map[string]string `json:"responseHeaders,omitempty"`
 }
 
 // HealthCheck represents health check configuration
@@ -124,7 +127,7 @@ type Rule struct {
 
 // RuleCondition represents a rule matching condition
 type RuleCondition struct {
-	Type     string `json:"type"`     // "path", "header", "method", "host"
+	Type     string `json:"type"`     // "path", "header", "method", "host". "method" added in Pangolin 1.24.0.
 	Operator string `json:"operator"` // "equals", "prefix", "regex"
 	Value    string `json:"value"`
 	Key      string `json:"key,omitempty"` // For header matching
@@ -251,24 +254,24 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 }
 
 // DeleteResource deletes a resource via Integration API
-// Endpoint: DELETE /resource/{resourceId}
+// Endpoint: DELETE /public-resource/{resourceId}
 func (c *Client) DeleteResource(ctx context.Context, resourceID string) error {
-	path := fmt.Sprintf("/resource/%s", resourceID)
+	path := fmt.Sprintf("/public-resource/%s", resourceID)
 	_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
 	return err
 }
 
 // UpdateResource updates a resource via Integration API (for headers, SSL settings, etc.)
-// Endpoint: POST /resource/{resourceId}
+// Endpoint: POST /public-resource/{resourceId}
 func (c *Client) UpdateResource(ctx context.Context, resourceID string, data map[string]interface{}) error {
-	path := fmt.Sprintf("/resource/%s", resourceID)
+	path := fmt.Sprintf("/public-resource/%s", resourceID)
 	_, err := c.doRequest(ctx, http.MethodPost, path, data)
 	return err
 }
 
 // CreateTarget creates a new routing target
 func (c *Client) CreateTarget(ctx context.Context, resourceID string, target *Target) (*Target, error) {
-	path := fmt.Sprintf("/resource/%s/target", resourceID)
+	path := fmt.Sprintf("/public-resource/%s/target", resourceID)
 	respBody, err := c.doRequest(ctx, http.MethodPut, path, target)
 	if err != nil {
 		return nil, err
@@ -287,7 +290,7 @@ func (c *Client) CreateTarget(ctx context.Context, resourceID string, target *Ta
 
 // ListTargets lists all targets for a resource
 func (c *Client) ListTargets(ctx context.Context, resourceID string) ([]Target, error) {
-	path := fmt.Sprintf("/resource/%s/targets", resourceID)
+	path := fmt.Sprintf("/public-resource/%s/targets", resourceID)
 	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -315,7 +318,7 @@ func (c *Client) DeleteTarget(ctx context.Context, targetID string) error {
 
 // CreateRule creates a new routing rule
 func (c *Client) CreateRule(ctx context.Context, resourceID string, rule *Rule) (*Rule, error) {
-	path := fmt.Sprintf("/resource/%s/rule", resourceID)
+	path := fmt.Sprintf("/public-resource/%s/rule", resourceID)
 	respBody, err := c.doRequest(ctx, http.MethodPut, path, rule)
 	if err != nil {
 		return nil, err
@@ -334,7 +337,7 @@ func (c *Client) CreateRule(ctx context.Context, resourceID string, rule *Rule) 
 
 // ListRules lists all rules for a resource
 func (c *Client) ListRules(ctx context.Context, resourceID string) ([]Rule, error) {
-	path := fmt.Sprintf("/resource/%s/rules", resourceID)
+	path := fmt.Sprintf("/public-resource/%s/rules", resourceID)
 	respBody, err := c.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -355,7 +358,7 @@ func (c *Client) ListRules(ctx context.Context, resourceID string) ([]Rule, erro
 
 // DeleteRule deletes a routing rule
 func (c *Client) DeleteRule(ctx context.Context, resourceID, ruleID string) error {
-	path := fmt.Sprintf("/resource/%s/rule/%s", resourceID, ruleID)
+	path := fmt.Sprintf("/public-resource/%s/rule/%s", resourceID, ruleID)
 	_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
 	return err
 }
@@ -487,9 +490,9 @@ func (c *Client) PickSiteDefaults(ctx context.Context) (*SiteDefaults, error) {
 }
 
 // CreateResource creates a new resource via Integration API
-// Endpoint: PUT /org/{orgId}/resource
+// Endpoint: PUT /org/{orgId}/public-resource
 func (c *Client) CreateResource(ctx context.Context, resourceData map[string]interface{}) (map[string]interface{}, error) {
-	path := fmt.Sprintf("/org/%s/resource", c.OrgID)
+	path := fmt.Sprintf("/org/%s/public-resource", c.OrgID)
 	respBody, err := c.doRequest(ctx, http.MethodPut, path, resourceData)
 	if err != nil {
 		return nil, err
@@ -507,9 +510,9 @@ func (c *Client) CreateResource(ctx context.Context, resourceData map[string]int
 }
 
 // CreateTargetRaw creates a new target via Integration API
-// Endpoint: PUT /resource/{resourceId}/target
+// Endpoint: PUT /public-resource/{resourceId}/target
 func (c *Client) CreateTargetRaw(ctx context.Context, resourceID string, targetData map[string]interface{}) (map[string]interface{}, error) {
-	path := fmt.Sprintf("/resource/%s/target", resourceID)
+	path := fmt.Sprintf("/public-resource/%s/target", resourceID)
 	respBody, err := c.doRequest(ctx, http.MethodPut, path, targetData)
 	if err != nil {
 		return nil, err
@@ -527,9 +530,9 @@ func (c *Client) CreateTargetRaw(ctx context.Context, resourceID string, targetD
 }
 
 // SetResourceRoles sets the allowed roles for a resource
-// Endpoint: POST /resource/{resourceId}/roles
+// Endpoint: POST /public-resource/{resourceId}/roles
 func (c *Client) SetResourceRoles(ctx context.Context, resourceID string, roleIDs []string) error {
-	path := fmt.Sprintf("/resource/%s/roles", resourceID)
+	path := fmt.Sprintf("/public-resource/%s/roles", resourceID)
 	payload := map[string]interface{}{
 		"roleIds": roleIDs,
 	}
@@ -538,9 +541,9 @@ func (c *Client) SetResourceRoles(ctx context.Context, resourceID string, roleID
 }
 
 // DisableSSO disables SSO for a resource
-// Endpoint: POST /resource/{resourceId} with {"sso":false,"skipToIdpId":null}
+// Endpoint: POST /public-resource/{resourceId} with {"sso":false,"skipToIdpId":null}
 func (c *Client) DisableSSO(ctx context.Context, resourceID string) error {
-	path := fmt.Sprintf("/resource/%s", resourceID)
+	path := fmt.Sprintf("/public-resource/%s", resourceID)
 	payload := map[string]interface{}{
 		"sso":         false,
 		"skipToIdpId": nil,
@@ -595,7 +598,7 @@ func (c *Client) ListResources(ctx context.Context) ([]map[string]interface{}, e
 	}
 
 	var allResources []map[string]interface{}
-	basePath := fmt.Sprintf("/org/%s/resources", c.OrgID)
+	basePath := fmt.Sprintf("/org/%s/public-resources", c.OrgID)
 
 	for page := 1; page <= listMaxPages; page++ {
 		path := fmt.Sprintf("%s?pageSize=%d&page=%d", basePath, listPageSize, page)
@@ -658,7 +661,7 @@ func (c *Client) ListTargetsRaw(ctx context.Context, resourceID string) ([]map[s
 	}
 
 	var allTargets []map[string]interface{}
-	basePath := fmt.Sprintf("/resource/%s/targets", resourceID)
+	basePath := fmt.Sprintf("/public-resource/%s/targets", resourceID)
 
 	// The targets endpoint uses limit/offset pagination (not pageSize/page).
 	for pageIdx := 0; pageIdx < listMaxPages; pageIdx++ {

@@ -239,7 +239,7 @@ func (s *GRPCRouteDriftTestSuite) TestHandleDelete_404Tolerance() {
 		Return(&pangolin.PangolinAPIError{
 			StatusCode: 404,
 			Method:     "DELETE",
-			Endpoint:   "/resource/res-gone",
+			Endpoint:   "/public-resource/res-gone",
 			Message:    "not found",
 		}).Once()
 
