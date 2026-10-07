@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-07
+
+### Changed
+
+- Migrate all public-resource API endpoints from legacy `/resource/...` paths to canonical `/public-resource/...` paths for Pangolin 1.24.0 compatibility (Pangolin renamed these in the Integration API Swagger spec)
+- `CreateResource`: `/org/{orgId}/resource` → `/org/{orgId}/public-resource`
+- `ListResources`: `/org/{orgId}/resources` → `/org/{orgId}/public-resources`
+- `DeleteResource`, `UpdateResource`, `DisableSSO`: `/resource/{id}` → `/public-resource/{id}`
+- `CreateTarget`, `CreateTargetRaw`, `ListTargets`, `ListTargetsRaw`: `/resource/{id}/target[s]` → `/public-resource/{id}/target[s]`
+- `CreateRule`, `ListRules`, `DeleteRule`: `/resource/{id}/rule[s]` → `/public-resource/{id}/rule[s]`
+- `SetResourceRoles`: `/resource/{id}/roles` → `/public-resource/{id}/roles`
+
+### Added
+
+- `SiteResource.ResponseHeaders` field (`map[string]string`) for Pangolin 1.24.0 response header customization feature
+- `RuleCondition.Type` now documents `"method"` as a valid value (HTTP method matching, added in Pangolin 1.24.0)
+
 ## [0.1.0] - 2026-03-12
 
 ### Added
