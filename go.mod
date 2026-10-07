@@ -1,14 +1,8 @@
 module github.com/dxas90/pangolin-gateway-controller
 
-go 1.25.0
+go 1.27.0
 
-require (
-	k8s.io/api v0.35.1
-	k8s.io/apimachinery v0.35.1
-	k8s.io/client-go v0.35.1
-	sigs.k8s.io/controller-runtime v0.23.1
-	sigs.k8s.io/gateway-api v1.4.1
-)
+toolchain go1.27.1
 
 require (
 	github.com/go-logr/logr v1.4.3
@@ -16,6 +10,11 @@ require (
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/time v0.12.0
 	gopkg.in/yaml.v3 v3.0.1
+	k8s.io/api v0.35.1
+	k8s.io/apimachinery v0.35.1
+	k8s.io/client-go v0.35.1
+	sigs.k8s.io/controller-runtime v0.23.1
+	sigs.k8s.io/gateway-api v1.4.1
 )
 
 require (
