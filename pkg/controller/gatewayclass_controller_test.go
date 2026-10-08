@@ -86,7 +86,7 @@ func (s *GatewayClassControllerTestSuite) TestReconcile_AcceptGatewayClass() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Verify status was updated to Accepted
 	s.Eventually(func() bool {
@@ -127,7 +127,7 @@ func (s *GatewayClassControllerTestSuite) TestReconcile_SkipOtherController() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Verify reconciler did not set Accepted=True (it should skip this GatewayClass)
 	fresh := &gatewayv1.GatewayClass{}
@@ -150,7 +150,7 @@ func (s *GatewayClassControllerTestSuite) TestReconcile_NotFound() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 // TestReconcile_IdempotentUpdate tests that re-reconciling doesn't update an already-accepted GatewayClass.
@@ -191,7 +191,7 @@ func (s *GatewayClassControllerTestSuite) TestReconcile_IdempotentUpdate() {
 	// Second reconcile - should be idempotent (needsUpdate=false path)
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 // TestSuite runs the GatewayClass controller test suite.

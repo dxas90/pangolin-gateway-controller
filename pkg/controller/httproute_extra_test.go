@@ -31,7 +31,7 @@ func TestIsSiteGoneError_GenericError(t *testing.T) {
 }
 
 func TestIsSiteGoneError_404WithSiteMessage(t *testing.T) {
-	err := &pangolin.PangolinAPIError{
+	err := &pangolin.APIError{
 		StatusCode: 404,
 		Method:     "GET",
 		Endpoint:   "/site/42",
@@ -41,7 +41,7 @@ func TestIsSiteGoneError_404WithSiteMessage(t *testing.T) {
 }
 
 func TestIsSiteGoneError_404WithoutSiteMessage(t *testing.T) {
-	err := &pangolin.PangolinAPIError{
+	err := &pangolin.APIError{
 		StatusCode: 404,
 		Method:     "DELETE",
 		Endpoint:   "/public-resource/res-1",
@@ -51,7 +51,7 @@ func TestIsSiteGoneError_404WithoutSiteMessage(t *testing.T) {
 }
 
 func TestIsSiteGoneError_500WithSiteMessage(t *testing.T) {
-	err := &pangolin.PangolinAPIError{
+	err := &pangolin.APIError{
 		StatusCode: 500,
 		Method:     "GET",
 		Endpoint:   "/site/42",
@@ -61,7 +61,7 @@ func TestIsSiteGoneError_500WithSiteMessage(t *testing.T) {
 }
 
 func TestIsSiteGoneError_WrappedPangolinError(t *testing.T) {
-	inner := &pangolin.PangolinAPIError{
+	inner := &pangolin.APIError{
 		StatusCode: 404,
 		Method:     "GET",
 		Endpoint:   "/site/99",
@@ -91,7 +91,7 @@ func TestCreatePangolinResourceForHostname_ConflictAdoptsExisting(t *testing.T) 
 	}
 
 	// CreateResource returns 409 conflict
-	conflictErr := &pangolin.PangolinAPIError{StatusCode: 409, Method: "PUT", Endpoint: "/org/test-org/public-resource", Message: "conflict"}
+	conflictErr := &pangolin.APIError{StatusCode: 409, Method: "PUT", Endpoint: "/org/test-org/public-resource", Message: "conflict"}
 	mockClient.On("CreateResource", ctx, mock.AnythingOfType("map[string]interface {}")).Return(nil, conflictErr)
 
 	// ListResources returns the already-existing resource
@@ -118,7 +118,7 @@ func TestCreatePangolinResourceForHostname_ConflictListFails_ReturnsError(t *tes
 		Spec:       gatewayv1.HTTPRouteSpec{},
 	}
 
-	conflictErr := &pangolin.PangolinAPIError{StatusCode: 409, Method: "PUT", Endpoint: "/org/x/public-resource", Message: "conflict"}
+	conflictErr := &pangolin.APIError{StatusCode: 409, Method: "PUT", Endpoint: "/org/x/public-resource", Message: "conflict"}
 	mockClient.On("CreateResource", ctx, mock.AnythingOfType("map[string]interface {}")).Return(nil, conflictErr)
 	// List returns error — can't adopt
 	mockClient.On("ListResources", ctx).Return(nil, errors.New("list unavailable"))

@@ -206,7 +206,7 @@ func (s *IntegrationTestSuite) TestEndToEnd_GatewayCreation() {
 
 	result, err := s.gatewayReconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Equal(2*time.Minute, result.RequeueAfter, "Should requeue after 2 minutes for verification")
 
 	// Verify Gateway was updated with site ID
 	s.Eventually(func() bool {
@@ -372,7 +372,7 @@ func (s *IntegrationTestSuite) TestEndToEnd_GatewayDeletion() {
 
 	result, err := s.gatewayReconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Verify Gateway was deleted (finalizer removed)
 	s.Eventually(func() bool {

@@ -96,7 +96,7 @@ func (r *GRPCRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	result, err := r.reconcileGRPCRoute(ctx, route, log)
 	if err != nil {
 		metrics.ReconcileTotal.WithLabelValues("grpcroute", "error").Inc()
-	} else if result.Requeue || result.RequeueAfter > 0 {
+	} else if result.RequeueAfter > 0 {
 		metrics.ReconcileTotal.WithLabelValues("grpcroute", "requeue").Inc()
 	} else {
 		metrics.ReconcileTotal.WithLabelValues("grpcroute", "success").Inc()
@@ -120,7 +120,7 @@ func (r *GRPCRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 			// If the resource is already gone (404), continue with finalizer removal
 			// Otherwise, retry deletion before removing the finalizer
 			removeFinalizer := false
-			if apiErr, ok := pangolin.AsPangolinAPIError(err); ok && apiErr.StatusCode == 404 {
+			if apiErr, ok := pangolin.AsAPIError(err); ok && apiErr.StatusCode == 404 {
 				log.Info("Resource already deleted in Pangolin (404), continuing with finalizer removal", "resourceID", resourceID)
 				removeFinalizer = true
 			}

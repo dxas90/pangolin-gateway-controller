@@ -128,7 +128,7 @@ func TestDoRequest_LargeErrorBody_Truncated(t *testing.T) {
 	c := newTestClient(srv)
 	_, err := c.ListSites(context.Background())
 	require.Error(t, err)
-	apiErr, ok := AsPangolinAPIError(err)
+	apiErr, ok := AsAPIError(err)
 	require.True(t, ok)
 	assert.Contains(t, apiErr.Message, "[truncated]")
 	assert.LessOrEqual(t, len(apiErr.Message), 600, "message must be bounded")
@@ -145,7 +145,7 @@ func TestDoRequest_ExactlyAtTruncationBoundary_NoTruncation(t *testing.T) {
 	c := newTestClient(srv)
 	_, err := c.ListSites(context.Background())
 	require.Error(t, err)
-	apiErr, ok := AsPangolinAPIError(err)
+	apiErr, ok := AsAPIError(err)
 	require.True(t, ok)
 	assert.NotContains(t, apiErr.Message, "[truncated]")
 }

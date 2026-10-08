@@ -251,7 +251,7 @@ func TestDeleteTarget_Success(t *testing.T) {
 
 // --- Error handling ---
 
-func TestDoRequest_404_ReturnsPangolinAPIError(t *testing.T) {
+func TestDoRequest_404_ReturnsAPIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -262,7 +262,7 @@ func TestDoRequest_404_ReturnsPangolinAPIError(t *testing.T) {
 	_, err := c.ListResources(context.Background())
 	require.Error(t, err)
 
-	apiErr, ok := AsPangolinAPIError(err)
+	apiErr, ok := AsAPIError(err)
 	require.True(t, ok)
 	assert.Equal(t, 404, apiErr.StatusCode)
 	assert.True(t, apiErr.IsNotFound())
@@ -385,7 +385,7 @@ func TestUpdateResource_Error(t *testing.T) {
 	c := newTestClient(srv)
 	err := c.UpdateResource(context.Background(), "res-42", map[string]interface{}{"ssl": true})
 	require.Error(t, err)
-	assert.True(t, IsPangolinAPIError(err))
+	assert.True(t, IsAPIError(err))
 }
 
 // --- CreateTarget (typed) ---

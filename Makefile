@@ -4,7 +4,7 @@ VERSION ?= 0.1.0
 IMG ?= $(IMAGE_TAG_BASE):$(VERSION)
 
 # Pin toolchain to match go.mod (avoids golang.org/x/net Go 1.26 stdlib incompatibility)
-export GOTOOLCHAIN=go1.27.1
+export GOTOOLCHAIN=go1.27.2
 
 # Build-time version injection
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)

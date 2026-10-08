@@ -124,7 +124,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_NewGateway() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Equal(2*time.Minute, result.RequeueAfter, "Should requeue after 2 minutes for verification")
 
 	// Verify Gateway was updated
 	s.Eventually(func() bool {
@@ -229,7 +229,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_DeleteGateway() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Verify Gateway is eventually deleted
 	s.Eventually(func() bool {
@@ -259,7 +259,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_WrongGatewayClass() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Mock should have no calls
 	s.mockPangolin.AssertExpectations(s.T())
@@ -276,7 +276,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_NotFound() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 // TestReconcile_DeleteGateway_NoSiteID tests Gateway deletion when no site ID is labeled.
@@ -302,7 +302,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_DeleteGateway_NoSiteID() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Gateway should be deleted (finalizer removed without Pangolin call)
 	s.Eventually(func() bool {
@@ -323,7 +323,7 @@ func (s *GatewayControllerTestSuite) TestReconcile_ExistingGateway_SiteDeleted()
 	s.Require().NoError(err)
 
 	// GetSite returns 404 - site was deleted externally
-	s.mockPangolin.On("GetSite", testutil.MockAnything, "99999").Return(nil, &pangolin.PangolinAPIError{
+	s.mockPangolin.On("GetSite", testutil.MockAnything, "99999").Return(nil, &pangolin.APIError{
 		StatusCode: 404,
 		Method:     "GET",
 		Endpoint:   "/site/99999",

@@ -95,7 +95,7 @@ func (s *NewtControllerTestSuite) TestReconcile_NotFound() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 // TestReconcile_WrongGatewayClass tests skipping Gateway with different class.
@@ -115,7 +115,7 @@ func (s *NewtControllerTestSuite) TestReconcile_WrongGatewayClass() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 // TestReconcile_NoSiteID tests skipping Gateway without site ID label.
@@ -135,7 +135,7 @@ func (s *NewtControllerTestSuite) TestReconcile_NoSiteID() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 // TestReconcile_NoCredentialsSecret tests skipping when credentials secret doesn't exist.
@@ -199,7 +199,7 @@ func (s *NewtControllerTestSuite) TestReconcile_WithCredentials() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 func TestNewtControllerSuite(t *testing.T) {

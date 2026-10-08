@@ -5,10 +5,10 @@ import (
 	"fmt"
 )
 
-// PangolinAPIError represents an error returned from the Pangolin API.
+// APIError represents an error returned from the Pangolin API.
 // It includes the HTTP status code, endpoint, and detailed error message
 // for better error handling and debugging.
-type PangolinAPIError struct {
+type APIError struct {
 	// StatusCode is the HTTP status code returned by the API
 	StatusCode int
 
@@ -23,39 +23,39 @@ type PangolinAPIError struct {
 }
 
 // Error implements the error interface
-func (e *PangolinAPIError) Error() string {
+func (e *APIError) Error() string {
 	return fmt.Sprintf("Pangolin API error (%d) on %s %s: %s",
 		e.StatusCode, e.Method, e.Endpoint, e.Message)
 }
 
 // IsNotFound returns true if the error is a 404 Not Found error
-func (e *PangolinAPIError) IsNotFound() bool {
+func (e *APIError) IsNotFound() bool {
 	return e.StatusCode == 404
 }
 
 // IsConflict returns true if the error is a 409 Conflict error
-func (e *PangolinAPIError) IsConflict() bool {
+func (e *APIError) IsConflict() bool {
 	return e.StatusCode == 409
 }
 
 // IsUnauthorized returns true if the error is a 401 Unauthorized error
-func (e *PangolinAPIError) IsUnauthorized() bool {
+func (e *APIError) IsUnauthorized() bool {
 	return e.StatusCode == 401
 }
 
 // IsForbidden returns true if the error is a 403 Forbidden error
-func (e *PangolinAPIError) IsForbidden() bool {
+func (e *APIError) IsForbidden() bool {
 	return e.StatusCode == 403
 }
 
 // IsServerError returns true if the error is a 5xx server error
-func (e *PangolinAPIError) IsServerError() bool {
+func (e *APIError) IsServerError() bool {
 	return e.StatusCode >= 500 && e.StatusCode < 600
 }
 
 // IsRetryable returns true if the error is potentially retryable
 // (server errors, rate limiting, timeouts)
-func (e *PangolinAPIError) IsRetryable() bool {
+func (e *APIError) IsRetryable() bool {
 	switch e.StatusCode {
 	case 429, 502, 503, 504: // Rate limit, Bad Gateway, Service Unavailable, Gateway Timeout
 		return true
@@ -64,14 +64,14 @@ func (e *PangolinAPIError) IsRetryable() bool {
 	}
 }
 
-// IsPangolinAPIError checks if an error is a PangolinAPIError
-func IsPangolinAPIError(err error) bool {
-	var apiErr *PangolinAPIError
+// IsAPIError checks if an error is a APIError
+func IsAPIError(err error) bool {
+	var apiErr *APIError
 	return errors.As(err, &apiErr)
 }
 
-// AsPangolinAPIError attempts to cast an error to PangolinAPIError
-func AsPangolinAPIError(err error) (*PangolinAPIError, bool) {
-	var apiErr *PangolinAPIError
+// AsAPIError attempts to cast an error to APIError
+func AsAPIError(err error) (*APIError, bool) {
+	var apiErr *APIError
 	return apiErr, errors.As(err, &apiErr)
 }

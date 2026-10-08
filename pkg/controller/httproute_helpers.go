@@ -39,7 +39,7 @@ func isSiteGoneError(err error) bool {
 	if err == nil {
 		return false
 	}
-	apiErr, ok := pangolin.AsPangolinAPIError(err)
+	apiErr, ok := pangolin.AsAPIError(err)
 	return ok && apiErr.IsNotFound() && strings.Contains(apiErr.Message, "Site")
 }
 
@@ -135,7 +135,7 @@ func (r *HTTPRouteReconciler) createPangolinResourceForHostname(ctx context.Cont
 	if createErr != nil {
 		// On 409 conflict, another reconcile just created this resource concurrently.
 		// Find and adopt it instead of failing so convergence is immediate.
-		if apiErr, ok := pangolin.AsPangolinAPIError(createErr); ok && apiErr.IsConflict() {
+		if apiErr, ok := pangolin.AsAPIError(createErr); ok && apiErr.IsConflict() {
 			if resources, listErr := r.PangolinClient.ListResources(ctx); listErr == nil {
 				for _, res := range resources {
 					if name, _ := res["name"].(string); name == resourceName {

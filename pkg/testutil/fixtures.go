@@ -8,7 +8,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-// Mock helpers
+// MockAnything matches any argument in testify mock expectations.
 var MockAnything = mock.Anything
 
 // Test constants for consistent test data

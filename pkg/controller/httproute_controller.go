@@ -83,7 +83,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	result, err := r.reconcileHTTPRoute(ctx, route, log)
 	if err != nil {
 		metrics.ReconcileTotal.WithLabelValues("httproute", "error").Inc()
-	} else if result.Requeue || result.RequeueAfter > 0 {
+	} else if result.RequeueAfter > 0 {
 		metrics.ReconcileTotal.WithLabelValues("httproute", "requeue").Inc()
 	} else {
 		metrics.ReconcileTotal.WithLabelValues("httproute", "success").Inc()

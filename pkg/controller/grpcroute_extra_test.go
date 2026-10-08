@@ -236,7 +236,7 @@ func (s *GRPCRouteDriftTestSuite) TestHandleDelete_404Tolerance() {
 
 	// Mock: DeleteResource returns 404 — resource already removed from Pangolin
 	s.mockPangolin.On("DeleteResource", testutil.MockAnything, "res-gone").
-		Return(&pangolin.PangolinAPIError{
+		Return(&pangolin.APIError{
 			StatusCode: 404,
 			Method:     "DELETE",
 			Endpoint:   "/public-resource/res-gone",
@@ -254,7 +254,7 @@ func (s *GRPCRouteDriftTestSuite) TestHandleDelete_404Tolerance() {
 
 	// 404 during deletion must NOT be treated as an error
 	s.Require().NoError(err, "404 from DeleteResource should be tolerated")
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Finalizer must be removed (k8s will then fully delete the object)
 	s.Require().Eventually(func() bool {

@@ -136,7 +136,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	result, err := r.reconcileGateway(ctx, gateway, log)
 	if err != nil {
 		metrics.ReconcileTotal.WithLabelValues("gateway", "error").Inc()
-	} else if result.Requeue || result.RequeueAfter > 0 {
+	} else if result.RequeueAfter > 0 {
 		metrics.ReconcileTotal.WithLabelValues("gateway", "requeue").Inc()
 	} else {
 		metrics.ReconcileTotal.WithLabelValues("gateway", "success").Inc()
@@ -163,7 +163,7 @@ func (r *GatewayReconciler) handleDelete(ctx context.Context, gateway *gatewayv1
 			// Delete the site from Pangolin
 			if err := r.PangolinClient.DeleteSite(ctx, siteID); err != nil {
 				// If already deleted (404), proceed with finalizer removal
-				if apiErr, ok := pangolin.AsPangolinAPIError(err); ok && apiErr.StatusCode == 404 {
+				if apiErr, ok := pangolin.AsAPIError(err); ok && apiErr.StatusCode == 404 {
 					log.Info("Site already deleted in Pangolin (404), continuing with finalizer removal", "siteID", siteID)
 				} else {
 					log.Error(err, "Failed to delete site from Pangolin, will retry", "siteID", siteID)
@@ -327,8 +327,8 @@ func (r *GatewayReconciler) verifyOrRecreateSite(ctx context.Context, gateway *g
 	site, err := r.PangolinClient.GetSite(ctx, siteIDStr)
 	if err != nil {
 		// Check if not found
-		if pangolin.IsPangolinAPIError(err) {
-			if apiErr, ok := pangolin.AsPangolinAPIError(err); ok && apiErr.StatusCode == 404 {
+		if pangolin.IsAPIError(err) {
+			if apiErr, ok := pangolin.AsAPIError(err); ok && apiErr.StatusCode == 404 {
 				// Site not found, recreate
 				log.Info("Site not found in Pangolin, will recreate", "siteID", siteIDStr)
 				r.Recorder.Eventf(gateway, corev1.EventTypeWarning, "DriftDetected", "Pangolin site %s not found, recreating", siteIDStr)

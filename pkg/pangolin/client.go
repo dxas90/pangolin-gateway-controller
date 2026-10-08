@@ -228,7 +228,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		if len(msg) > 512 {
 			msg = msg[:512] + "... [truncated]"
 		}
-		apiErr := &PangolinAPIError{
+		apiErr := &APIError{
 			StatusCode: resp.StatusCode,
 			Endpoint:   path,
 			Method:     method,

@@ -241,7 +241,7 @@ func (s *HTTPRouteControllerTestSuite) TestReconcile_DeleteHTTPRoute() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Verify HTTPRoute was deleted (finalizer removed)
 	s.Eventually(func() bool {

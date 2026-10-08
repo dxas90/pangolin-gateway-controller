@@ -140,7 +140,7 @@ func main() {
 		ControllerClass: cfg.Controller.GatewayClassName,
 		NewtEndpoint:    cfg.Controller.NewtEndpoint,
 		Config:          &cfg.Controller,
-		Recorder:        mgr.GetEventRecorderFor("gateway-controller"),
+		Recorder:        pgctrl.NewEventRecorderAdapter(mgr.GetEventRecorder("gateway-controller")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create Gateway controller")
 		os.Exit(1)
@@ -153,7 +153,7 @@ func main() {
 		Scheme:         mgr.GetScheme(),
 		ControllerName: "pangol.in/gateway-controller",
 		Config:         &cfg.Controller,
-		Recorder:       mgr.GetEventRecorderFor("gatewayclass-controller"),
+		Recorder:       pgctrl.NewEventRecorderAdapter(mgr.GetEventRecorder("gatewayclass-controller")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create GatewayClass controller")
 		os.Exit(1)
@@ -166,7 +166,7 @@ func main() {
 		Scheme:         mgr.GetScheme(),
 		PangolinClient: pangolinClient,
 		Config:         &cfg.Controller,
-		Recorder:       mgr.GetEventRecorderFor("httproute-controller"),
+		Recorder:       pgctrl.NewEventRecorderAdapter(mgr.GetEventRecorder("httproute-controller")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create HTTPRoute controller")
 		os.Exit(1)
@@ -179,7 +179,7 @@ func main() {
 		Scheme:         mgr.GetScheme(),
 		PangolinClient: pangolinClient,
 		Config:         &cfg.Controller,
-		Recorder:       mgr.GetEventRecorderFor("grpcroute-controller"),
+		Recorder:       pgctrl.NewEventRecorderAdapter(mgr.GetEventRecorder("grpcroute-controller")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create GRPCRoute controller")
 		os.Exit(1)
@@ -196,7 +196,7 @@ func main() {
 		NewtImage:       cfg.Controller.NewtImage,
 		ControllerClass: cfg.Controller.GatewayClassName,
 		Config:          &cfg.Controller,
-		Recorder:        mgr.GetEventRecorderFor("newt-controller"),
+		Recorder:        pgctrl.NewEventRecorderAdapter(mgr.GetEventRecorder("newt-controller")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create Newt controller")
 		os.Exit(1)

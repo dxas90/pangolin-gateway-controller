@@ -129,7 +129,7 @@ func (s *GRPCRouteControllerTestSuite) TestReconcile_DeleteGRPCRoute() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// Verify GRPCRoute was deleted (finalizer removed)
 	s.Eventually(func() bool {
@@ -161,7 +161,7 @@ func (s *GRPCRouteControllerTestSuite) TestReconcile_DeleteGRPCRoute_NoResourceI
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 
 	// GRPCRoute should be deleted - no Pangolin calls made
 	s.Eventually(func() bool {
@@ -182,7 +182,7 @@ func (s *GRPCRouteControllerTestSuite) TestReconcile_NotFound() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Zero(result.RequeueAfter)
 }
 
 // TestReconcile_NoParentGateway tests GRPCRoute without parent gateway references.
@@ -211,7 +211,7 @@ func (s *GRPCRouteControllerTestSuite) TestReconcile_NoParentGateway() {
 
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().False(result.Requeue)
+	s.Require().Equal(30*time.Second, result.RequeueAfter)
 }
 
 // TestReconcile_GatewayNotReady tests GRPCRoute when Gateway doesn't have site ID.

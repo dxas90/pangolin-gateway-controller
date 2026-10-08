@@ -153,7 +153,7 @@ func TestVerifyOrRecreateSite_SiteNotFound_Recreates(t *testing.T) {
 	ctx := context.Background()
 
 	// GetSite returns 404
-	mockClient.On("GetSite", ctx, "99999").Return(nil, &pangolin.PangolinAPIError{
+	mockClient.On("GetSite", ctx, "99999").Return(nil, &pangolin.APIError{
 		StatusCode: 404,
 		Method:     "GET",
 		Endpoint:   "/site/99999",
@@ -220,7 +220,7 @@ func TestVerifyOrRecreateSite_TransientAPIError(t *testing.T) {
 	}
 
 	// Non-404 API error (e.g., 500)
-	mockClient.On("GetSite", ctx, "123").Return(nil, &pangolin.PangolinAPIError{
+	mockClient.On("GetSite", ctx, "123").Return(nil, &pangolin.APIError{
 		StatusCode: 500,
 		Method:     "GET",
 		Endpoint:   "/site/123",
@@ -256,7 +256,7 @@ func TestVerifyOrRecreateSite_NonPangolinError(t *testing.T) {
 		},
 	}
 
-	// Generic error (not PangolinAPIError)
+	// Generic error (not APIError)
 	mockClient.On("GetSite", ctx, "123").Return(nil, errors.New("connection refused")).Once()
 
 	err := r.verifyOrRecreateSite(ctx, gateway, "123", log)
