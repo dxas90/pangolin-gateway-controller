@@ -1,3 +1,4 @@
+{{- $useProjectedToken := and .Values.serviceAccount.projectedToken.enabled (not .Values.serviceAccount.automount) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,6 +34,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "base.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      {{- if .Values.priorityClass.enabled }}
+      priorityClassName: {{ include "base.priorityClassName" . }}
+      {{- end }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -133,17 +138,49 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.webhook.enabled }}
+          {{- if or $useProjectedToken .Values.webhook.enabled }}
           volumeMounts:
+            {{- if $useProjectedToken }}
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
             - name: webhook-certs
               mountPath: {{ .Values.webhook.certDir | default "/tmp/k8s-webhook-server/serving-certs" }}
               readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.webhook.enabled }}
+      {{- if or $useProjectedToken .Values.webhook.enabled }}
       volumes:
+        {{- if $useProjectedToken }}
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: {{ .Values.serviceAccount.projectedToken.expirationSeconds }}
+                  {{- with .Values.serviceAccount.projectedToken.audience }}
+                  audience: {{ . | quote }}
+                  {{- end }}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+        {{- end }}
+        {{- if .Values.webhook.enabled }}
         - name: webhook-certs
           secret:
             secretName: {{ include "base.fullname" . }}-webhook-certs
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

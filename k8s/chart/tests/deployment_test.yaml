@@ -14,7 +14,10 @@ tests:
           value: RELEASE-NAME-pangolin-gateway-controller
       - equal:
           path: spec.replicas
-          value: 1
+          value: 2
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
       - equal:
           path: spec.template.spec.containers[0].name
           value: controller
@@ -32,6 +35,17 @@ tests:
           path: spec.template.spec.containers[0].image
           value: ghcr.io/dxas90/pangolin-gateway-controller:v1.2.3
 
+  - it: should set priorityClassName when PriorityClass is enabled
+    set:
+      priorityClass.enabled: true
+      priorityClass.name: pangolin-controller-priority
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
+    asserts:
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: pangolin-controller-priority
+
   - it: should set resource limits and requests
     set:
       resources.limits.memory: "256Mi"
@@ -44,7 +58,7 @@ tests:
           value: 256Mi
       - equal:
           path: spec.template.spec.containers[0].resources.limits.cpu
-          value: 200m
+          value: 100m
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
           value: 128Mi
@@ -104,6 +118,18 @@ tests:
             containerPort: 8081
             protocol: TCP
 
+  - it: should have named liveness and readiness probe ports
+    set:
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: health
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: health
+
   - it: should have args with --env-config
     set:
       pangolin.apiKey: "test-key"
@@ -112,3 +138,21 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: "--env-config"
+
+  - it: should mount an explicit projected service account token when automount is disabled
+    set:
+      pangolin.apiKey: "test-key"
+      pangolin.orgId: "test-org"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: kube-api-access
+            mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+            readOnly: true
+      - equal:
+          path: spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.path
+          value: token
+      - equal:
+          path: spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.expirationSeconds
+          value: 3600

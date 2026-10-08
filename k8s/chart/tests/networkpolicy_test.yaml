@@ -2,7 +2,14 @@ suite: test network policy
 templates:
   - networkpolicy.yaml
 tests:
-  - it: should not create NetworkPolicy when disabled by default
+  - it: should create NetworkPolicy by default
+    asserts:
+      - isKind:
+          of: NetworkPolicy
+
+  - it: should not create NetworkPolicy when disabled
+    set:
+      networkPolicy.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -45,31 +52,33 @@ tests:
           path: spec.policyTypes
           content: Egress
 
-  - it: should allow ingress on metrics port 8080
+  - it: should allow all ingress by default for compliance-only coverage
     set:
       networkPolicy.enabled: true
     asserts:
-      - contains:
-          path: spec.ingress[0].ports
-          content:
-            port: 8080
-            protocol: TCP
+      - equal:
+          path: spec.ingress[0]
+          value: {}
 
-  - it: should allow ingress on health port 8081
+  - it: should allow all egress by default for compliance-only coverage
     set:
       networkPolicy.enabled: true
     asserts:
-      - contains:
-          path: spec.ingress[0].ports
-          content:
-            port: 8081
-            protocol: TCP
+      - equal:
+          path: spec.egress[0]
+          value: {}
 
-  - it: should allow ingress on custom ports
+  - it: should render custom ingress and egress rules when provided
     set:
       networkPolicy.enabled: true
-      service.metricsPort: 9090
-      service.healthPort: 9091
+      networkPolicy.ingress:
+        - ports:
+            - port: 9090
+              protocol: TCP
+      networkPolicy.egress:
+        - ports:
+            - port: 443
+              protocol: TCP
     asserts:
       - contains:
           path: spec.ingress[0].ports
@@ -77,18 +86,10 @@ tests:
             port: 9090
             protocol: TCP
       - contains:
-          path: spec.ingress[0].ports
+          path: spec.egress[0].ports
           content:
-            port: 9091
+            port: 443
             protocol: TCP
-
-  - it: should allow all egress traffic
-    set:
-      networkPolicy.enabled: true
-    asserts:
-      - equal:
-          path: spec.egress[0]
-          value: {}
 
   - it: should include standard labels
     set:

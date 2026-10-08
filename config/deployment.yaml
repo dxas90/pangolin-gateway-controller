@@ -48,7 +48,7 @@ metadata:
   labels:
     app: pangolin-gateway-controller
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: pangolin-gateway-controller
@@ -58,6 +58,7 @@ spec:
         app: pangolin-gateway-controller
     spec:
       serviceAccountName: pangolin-gateway-controller
+      automountServiceAccountToken: false
       containers:
         - name: controller
           image: pangolin-gateway-controller:latest
@@ -136,6 +137,29 @@ spec:
             readOnlyRootFilesystem: true
             runAsNonRoot: true
             runAsUser: 65532
+          volumeMounts:
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
       securityContext:
         fsGroup: 65532
         runAsNonRoot: true
@@ -157,3 +181,23 @@ spec:
       protocol: TCP
   selector:
     app: pangolin-gateway-controller
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pangolin-gateway-controller
+  namespace: pangolin-system
+  labels:
+    app: pangolin-gateway-controller
+spec:
+  podSelector:
+    matchLabels:
+      app: pangolin-gateway-controller
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - {}
+  egress:
+    - {}

@@ -63,7 +63,9 @@ helm install pangolin-gateway-controller ./k8s/chart \
 
 | Parameter | Description | Default |
 | --------- | ----------- | ------- |
-| `replicaCount` | Number of controller replicas | `1` |
+| `replicaCount` | Number of controller replicas | `2` |
+| `serviceAccount.automount` | Automatically mount API server credentials | `false` |
+| `serviceAccount.projectedToken.enabled` | Mount an explicit bound token for Kubernetes API access when automount is disabled | `true` |
 | `image.repository` | Controller image repository | `ghcr.io/dxas90/pangolin-gateway-controller` |
 | `image.tag` | Controller image tag | `latest` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
@@ -78,6 +80,13 @@ helm install pangolin-gateway-controller ./k8s/chart \
 | `resources.limits.memory` | Memory limit | `256Mi` |
 | `resources.requests.cpu` | CPU request | `100m` |
 | `resources.requests.memory` | Memory request | `128Mi` |
+| `priorityClass.enabled` | Create and assign a chart-managed PriorityClass | `false` |
+| `priorityClass.name` | PriorityClass name; defaults to release fullname when enabled | `""` |
+| `priorityClass.value` | PriorityClass scheduling value | `1000000` |
+| `priorityClass.description` | PriorityClass description | `Priority class for Pangolin Gateway Controller pods` |
+| `networkPolicy.enabled` | Create NetworkPolicy for controller ingress/egress coverage | `true` |
+| `networkPolicy.ingress` | Ingress rules; default is allow-all for compliance-only coverage | `[{ }]` |
+| `networkPolicy.egress` | Egress rules; default is allow-all for compliance-only coverage | `[{ }]` |
 
 ### Security Configuration
 

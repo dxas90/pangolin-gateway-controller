@@ -1,4 +1,4 @@
-replicaCount: 1
+replicaCount: 2
 
 image:
   repository: "ghcr.io/dxas90/pangolin-gateway-controller"
@@ -12,9 +12,13 @@ fullnameOverride: ""
 
 serviceAccount:
   create: true
-  automount: true
+  automount: false
   annotations: {}
   name: "pangolin-gateway-controller"
+  projectedToken:
+    enabled: true
+    expirationSeconds: 3600
+    audience: ""
 
 service:
   type: "ClusterIP"
@@ -23,6 +27,16 @@ service:
   annotations: {}
 
 namespace: "pangolin-system"
+
+# PriorityClass is disabled by default. Enable to create and assign a
+# chart-managed PriorityClass to the controller pods.
+priorityClass:
+  enabled: false
+  name: ""  # Defaults to the chart fullname when enabled
+  value: 1000000
+  globalDefault: false
+  preemptionPolicy: "PreemptLowerPriority"
+  description: "Priority class for Pangolin Gateway Controller pods"
 
 # RBAC Configuration
 rbac:
@@ -85,17 +99,17 @@ securityContext:
 # Resource limits
 resources:
   limits:
-    cpu: 200m
-    memory: 256Mi
-  requests:
     cpu: 100m
     memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
 
 # Health probes
 livenessProbe:
   httpGet:
     path: /healthz
-    port: 8081
+    port: health
   initialDelaySeconds: 15
   periodSeconds: 20
   failureThreshold: 3
@@ -104,7 +118,7 @@ livenessProbe:
 readinessProbe:
   httpGet:
     path: /readyz
-    port: 8081
+    port: health
   initialDelaySeconds: 5
   periodSeconds: 10
   failureThreshold: 3
@@ -133,8 +147,8 @@ affinity: {}
   #         - controller
 # Autoscaling (disabled by default for controllers)
 autoscaling:
-  enabled: true
-  minReplicas: 1
+  enabled: false
+  minReplicas: 2
   maxReplicas: 3
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: 80
@@ -157,9 +171,14 @@ serviceMonitor:
   scrapeTimeout: 10s
   labels: {}
 
-# NetworkPolicy to restrict ingress/egress
+# NetworkPolicy coverage for Popeye/compliance without enforcing cluster-specific traffic by default.
+# Override ingress/egress with stricter rules if your cluster networking model requires it.
 networkPolicy:
-  enabled: false
+  enabled: true
+  ingress:
+    - {}
+  egress:
+    - {}
 
 # Admission webhooks (disabled by default)
 # Requires TLS certificates — provide via caBundle or enable certManager integration.

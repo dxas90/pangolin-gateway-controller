@@ -2,7 +2,14 @@ suite: test pod disruption budget
 templates:
   - poddisruptionbudget.yaml
 tests:
-  - it: should not create PDB when disabled by default
+  - it: should create PDB by default
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+
+  - it: should not create PDB when disabled
+    set:
+      podDisruptionBudget.enabled: false
     asserts:
       - hasDocuments:
           count: 0

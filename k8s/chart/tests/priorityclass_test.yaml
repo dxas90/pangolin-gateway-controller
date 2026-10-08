@@ -1,0 +1,55 @@
+suite: test priority class
+templates:
+  - priorityclass.yaml
+tests:
+  - it: should not create PriorityClass when disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create PriorityClass when enabled
+    set:
+      priorityClass.enabled: true
+    asserts:
+      - isKind:
+          of: PriorityClass
+      - equal:
+          path: apiVersion
+          value: scheduling.k8s.io/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-pangolin-gateway-controller
+      - equal:
+          path: value
+          value: 1000000
+      - equal:
+          path: globalDefault
+          value: false
+      - equal:
+          path: preemptionPolicy
+          value: PreemptLowerPriority
+      - equal:
+          path: description
+          value: Priority class for Pangolin Gateway Controller pods
+
+  - it: should support custom PriorityClass values
+    set:
+      priorityClass.enabled: true
+      priorityClass.name: pangolin-controller-priority
+      priorityClass.value: 12345
+      priorityClass.globalDefault: false
+      priorityClass.preemptionPolicy: Never
+      priorityClass.description: "Custom Pangolin controller priority"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: pangolin-controller-priority
+      - equal:
+          path: value
+          value: 12345
+      - equal:
+          path: preemptionPolicy
+          value: Never
+      - equal:
+          path: description
+          value: Custom Pangolin controller priority
