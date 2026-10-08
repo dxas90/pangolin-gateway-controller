@@ -17,5 +17,65 @@ spec:
           port: 8080
           weight: 90
         - name: app-canary
-          port: 8080
+          port: 8081
           weight: 10
+
+# Example backend services for testing
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-stable
+  namespace: default
+spec:
+  selector:
+    app: api
+  ports:
+    - port: 8080
+      targetPort: 5678
+      protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-canary
+  namespace: default
+spec:
+  selector:
+    app: api
+  ports:
+    - port: 8081
+      targetPort: 5678
+      protocol: TCP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: hashicorp/http-echo
+          args:
+            - "-text=API Response"
+          ports:
+            - containerPort: 5678
+          resources:
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
