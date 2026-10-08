@@ -186,7 +186,6 @@ func TestVerifyOrRecreateSite_SiteNotFound_Recreates(t *testing.T) {
 				foundDrift = true
 			}
 		default:
-			break
 		}
 		if foundDrift {
 			break

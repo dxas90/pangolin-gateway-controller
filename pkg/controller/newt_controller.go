@@ -380,6 +380,7 @@ func (r *NewtReconciler) buildNewtService(gateway *gatewayv1.Gateway, site *pang
 // All newt-owned resources use "pangolin-newt" as the field manager.
 func (r *NewtReconciler) applyResource(ctx context.Context, obj client.Object) error {
 	obj.SetManagedFields(nil)
+	//nolint:staticcheck // client.Apply is deprecated in newer controller-runtime but still fully supported
 	return r.Patch(ctx, obj, client.Apply, client.ForceOwnership, client.FieldOwner("pangolin-newt"))
 }
 
