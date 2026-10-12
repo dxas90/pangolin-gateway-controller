@@ -58,7 +58,7 @@ GRPCRoute          ──────►   Resource + Targets (TCP/UDP)
 - Kubernetes 1.25+
 - Gateway API CRDs v1.4.1+ (GRPCRoute in v1)
 - Pangolin account with Integration API access
-- Go 1.24+ (for development)
+- Go 1.27+ (for development)
 - Docker (for building images)
 - Kind or similar Kubernetes cluster (for testing)
 
@@ -404,17 +404,15 @@ go run cmd/controller/main.go --env-config
 go run cmd/controller/main.go --config config/config.example.yaml
 ```
 
-### Testing go
+### Testing
 
 ```bash
-# Run unit tests
-go test ./pkg/...
+# Run all tests (unit + envtest integration)
+make test
 
-# Run with coverage
-go test -cover ./pkg/...
-
-# Integration tests (requires running cluster)
-go test -tags=integration ./test/...
+# Run with coverage report
+go test -cover -coverprofile=coverage.out ./pkg/...
+go tool cover -func=coverage.out
 ```
 
 ## Monitoring
@@ -443,20 +441,20 @@ The controller exposes Prometheus metrics on `:8080/metrics`:
 kind create cluster
 ```
 
-1. **Install Gateway API CRDs**
+2. **Install Gateway API CRDs**
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.3/standard-install.yaml
 ```
 
-1. **Build and load image**
+3. **Build and load image**
 
 ```bash
 make docker-build IMG=pangolin-gateway-controller:latest
 kind load docker-image pangolin-gateway-controller:latest
 ```
 
-1. **Set up credentials**
+4. **Set up credentials**
 
 ```bash
 kubectl create secret generic pangolin-api-credentials \
@@ -465,7 +463,7 @@ kubectl create secret generic pangolin-api-credentials \
   -n pangolin-system
 ```
 
-1. **Deploy controller**
+5. **Deploy controller**
 
 ```bash
 kubectl apply -f config/rbac.yaml
@@ -473,13 +471,13 @@ kubectl apply -f config/gatewayclass.yaml
 kubectl apply -f config/deployment.yaml
 ```
 
-1. **Deploy test application**
+6. **Deploy test application**
 
 ```bash
-kubectl apply -f full-test.yaml
+kubectl apply -f examples/full-test.yaml
 ```
 
-1. **Verify deployment**
+7. **Verify deployment**
 
 ```bash
 # Check controller logs

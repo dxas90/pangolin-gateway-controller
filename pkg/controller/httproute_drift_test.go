@@ -330,13 +330,9 @@ func TestVerifyOrUpdateResource_EmptyResourceList(t *testing.T) {
 
 // --- reconcileHTTPRoute NoHostnames requeue ---
 
+// TestReconcileHTTPRoute_NoHostnames_RequeuesAfter5m is superseded by
+// TestReconcileHTTPRoute_NoHostnames in httproute_extra_test.go which covers
+// the same path with proper assertions. Kept as a marker only.
 func TestReconcileHTTPRoute_NoHostnames_RequeuesAfter5m(t *testing.T) {
-	// This tests the code path in reconcileHTTPRoute where len(route.Spec.Hostnames)==0
-	// returns RequeueAfter: 5*time.Minute. We verify this indirectly since the
-	// reconcileHTTPRoute is not exported. The Reconcile path with empty hostnames
-	// should produce RequeueAfter: 5*time.Minute.
-	// This is tested through the envtest suite (httproute_controller_test.go).
-	// Here we just verify the constant is correct.
-	// The code path: line 196-199 of httproute_controller.go
-	t.Log("NoHostnames requeue is tested via envtest in httproute_controller_test.go")
+	t.Skip("superseded by TestReconcileHTTPRoute_NoHostnames in httproute_extra_test.go")
 }

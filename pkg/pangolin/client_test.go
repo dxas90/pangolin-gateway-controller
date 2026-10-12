@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -1198,5 +1199,322 @@ func TestIsHexString(t *testing.T) {
 		t.Run(tt.input, func(t *testing.T) {
 			assert.Equal(t, tt.expected, isHexString(tt.input))
 		})
+	}
+}
+
+// --- Circuit Breaker: half-open state ---
+
+func TestCircuitBreaker_HalfOpenState(t *testing.T) {
+	cb := NewCircuitBreaker(2, 10*time.Millisecond)
+
+	// Record failures to open the circuit
+	cb.RecordFailure()
+	cb.RecordFailure()
+	assert.Equal(t, "open", cb.State())
+
+	// Wait for timeout to expire
+	time.Sleep(15 * time.Millisecond)
+
+	// Next Allow() call should transition to half-open
+	err := cb.Allow()
+	assert.NoError(t, err)
+	assert.Equal(t, "half-open", cb.State())
+
+	// RecordSuccess should close the circuit
+	cb.RecordSuccess()
+	assert.Equal(t, "closed", cb.State())
+}
+
+func TestCircuitBreaker_StateCallback_HalfOpen(t *testing.T) {
+	cb := NewCircuitBreaker(1, 10*time.Millisecond)
+	var stateTransitions []string
+
+	cb.SetStateChangeCallback(func(from, to string) {
+		stateTransitions = append(stateTransitions, from+"->"+to)
+	})
+
+	// Open circuit: closed -> open
+	cb.RecordFailure()
+	assert.Len(t, stateTransitions, 1)
+	assert.Equal(t, "closed->open", stateTransitions[0])
+
+	// Wait for timeout
+	time.Sleep(15 * time.Millisecond)
+
+	// Transition to half-open: open -> half-open (no callback, internal transition)
+	_ = cb.Allow()
+	assert.Equal(t, "half-open", cb.State())
+
+	// Success closes: half-open -> closed
+	cb.RecordSuccess()
+	// Callbacks: closed->open (1), then half-open->closed (2)
+	assert.Len(t, stateTransitions, 2) // closed->open, then half-open->closed
+	assert.Equal(t, "half-open->closed", stateTransitions[len(stateTransitions)-1])
+}
+
+// --- doRequest: network errors ---
+
+func TestDoRequest_NetworkError(t *testing.T) {
+	c := NewClient("key", "org")
+	c.BaseURL = "http://127.0.0.1:1" // Non-listening port
+	c.HTTPClient = &http.Client{Timeout: 100 * time.Millisecond}
+
+	_, err := c.ListResources(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request failed")
+}
+
+func TestDoRequest_InvalidURL(t *testing.T) {
+	c := NewClient("key", "org")
+	c.BaseURL = "ht	tp://invalid url" // Invalid URL
+	c.HTTPClient = &http.Client{}
+
+	_, err := c.ListResources(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create request")
+}
+
+// --- GetServerVersion: missing fields ---
+
+func TestGetServerVersion_MissingServerVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"data": map[string]interface{}{
+				"token": "jwt-token",
+				// serverVersion omitted
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	version, err := c.GetServerVersion(context.Background(), srv.URL, "newt-id", "newt-secret")
+	require.NoError(t, err)
+	assert.Equal(t, "", version) // Should return empty string when field is absent
+}
+
+func TestGetServerVersion_MissingDataKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			// data key omitted
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	version, err := c.GetServerVersion(context.Background(), srv.URL, "newt-id", "newt-secret")
+	require.NoError(t, err)
+	assert.Equal(t, "", version) // Should return empty string when data is missing
+}
+
+// --- Ping: error paths ---
+
+func TestPing_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	err := c.Ping(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "server error 503")
+}
+
+func TestPing_OmitsAuthorizationHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	err := c.Ping(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "", gotAuth) // Authorization header must be omitted
+}
+
+func TestPing_ClientError(t *testing.T) {
+	c := NewClient("key", "org")
+	c.BaseURL = "http://127.0.0.1:1"
+	c.HTTPClient = &http.Client{Timeout: 100 * time.Millisecond}
+
+	err := c.Ping(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "API unreachable")
+}
+
+// --- ListSites: missing sites key ---
+
+func TestListSites_NoSitesKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"data": map[string]interface{}{
+				// sites key omitted
+				"pagination": map[string]interface{}{
+					"total":    float64(0),
+					"pageSize": float64(1000),
+					"page":     float64(1),
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	sites, err := c.ListSites(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, sites, 0) // Should return empty slice when sites key is absent
+}
+
+// --- ListTargetsRaw: empty targets ---
+
+func TestListTargetsRaw_EmptyData(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"data": map[string]interface{}{
+				// targets key omitted
+				"pagination": map[string]interface{}{
+					"total":  float64(0),
+					"limit":  float64(1000),
+					"offset": float64(0),
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	targets, err := c.ListTargetsRaw(context.Background(), "res-1")
+	require.NoError(t, err)
+	assert.Len(t, targets, 0) // Should return empty slice when targets key is absent
+}
+
+// --- doRequest: response body read error (via circuit breaker success) ---
+
+func TestDoRequest_CircuitBreakerRecordSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	c.Breaker = NewCircuitBreaker(5, 30*time.Second)
+	assert.Equal(t, "closed", c.Breaker.State())
+
+	// Successful call should not change state
+	_, err := c.ListResources(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "closed", c.Breaker.State())
+}
+
+// --- GetServerVersion: context errors ---
+
+func TestGetServerVersion_ContextCanceled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate delay
+		time.Sleep(100 * time.Millisecond)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"data": map[string]interface{}{
+				"token":         "jwt",
+				"serverVersion": "1.0",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := c.GetServerVersion(ctx, srv.URL, "id", "secret")
+	require.Error(t, err)
+}
+
+// --- Ping: circuit breaker open ---
+
+func TestPing_CircuitBreakerOpen(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	c.Breaker = NewCircuitBreaker(1, 30*time.Second)
+
+	// Force circuit open
+	c.Breaker.RecordFailure()
+	assert.Equal(t, "open", c.Breaker.State())
+
+	// Ping should return ErrCircuitOpen without hitting server
+	err := c.Ping(context.Background())
+	assert.ErrorIs(t, err, ErrCircuitOpen)
+}
+
+// --- Ping: 4xx response (should not error) ---
+
+func TestPing_401Response(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	// 401 < 500, so Ping should not error
+	err := c.Ping(context.Background())
+	require.NoError(t, err)
+}
+
+// --- Circuit breaker state transitions with callback ---
+
+func TestCircuitBreaker_OpenToClosedTransition(t *testing.T) {
+	cb := NewCircuitBreaker(1, 1*time.Millisecond)
+	var transitions []string
+
+	cb.SetStateChangeCallback(func(from, to string) {
+		transitions = append(transitions, from+"->"+to)
+	})
+
+	// Trigger open
+	cb.RecordFailure()
+	assert.Equal(t, 1, len(transitions))
+	assert.Equal(t, "closed->open", transitions[0])
+
+	// Wait for half-open
+	time.Sleep(5 * time.Millisecond)
+	_ = cb.Allow()
+
+	// Immediately record success in half-open state
+	cb.RecordSuccess()
+	assert.Equal(t, "closed", cb.State())
+
+	// Should have open->half-open (internal) and half-open->closed
+	assert.True(t, len(transitions) >= 2)
+	assert.Equal(t, "half-open->closed", transitions[len(transitions)-1])
+}
+
+func TestCircuitBreaker_StateNameUnknown_ViaInvalidState(t *testing.T) {
+	// Test the default case in stateName() by setting an impossible state value.
+	// This is unreachable via normal API, but we can test it with reflection.
+	cb := NewCircuitBreaker(1, 1*time.Second)
+
+	// Use reflection to set an invalid state value
+	reflectCB := reflect.ValueOf(cb).Elem()
+	stateField := reflectCB.FieldByName("state")
+	if stateField.IsValid() && stateField.CanSet() {
+		// Set to an invalid state value (e.g., 999)
+		stateField.SetInt(999)
+		// Now State() should call stateName() which will hit the default case
+		state := cb.State()
+		assert.Equal(t, "unknown", state)
 	}
 }

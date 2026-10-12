@@ -90,7 +90,7 @@ func (e *PangolinAPIError) IsRetryable() bool
 
 **Resource Metrics**:
 
-- `pangolin_sites_total` - Pang olin sites by online status
+- `pangolin_sites_total` - Pangolin sites by online status
 - `pangolin_resources_total` - Total Pangolin resources
 - `pangolin_targets_total` - Pangolin targets by enabled status
 
@@ -339,8 +339,6 @@ expr: rate(pangolin_api_errors_total[5m]) > 0.05
 
 ## Next Steps
 
-1. **Immediate**: Implement multi-backend weight handling
-2. **Week 1**: Add circuit breaker and config validation
-3. **Week 2**: Start unit test coverage
-4. **Week 3**: Webhook validation
-5. **Week 4**: Enhanced Helm chart for production readiness
+1. **Webhook Validation**: Implement `ValidatingWebhookConfiguration` for Gateway/HTTPRoute (design in item 7 above)
+2. **Comprehensive Godoc**: Full godoc coverage for all exported types and functions
+3. **E2E Tests**: Tests against a real Pangolin instance

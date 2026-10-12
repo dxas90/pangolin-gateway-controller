@@ -13,7 +13,7 @@ This Helm chart deploys the Pangolin Gateway Controller to a Kubernetes cluster.
 Before installing this chart, you must install the Gateway API CRDs:
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.3/standard-install.yaml
 ```
 
 ## Installing the Chart

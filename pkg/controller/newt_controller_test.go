@@ -9,6 +9,7 @@ import (
 	"github.com/dxas90/pangolin-gateway-controller/pkg/pangolin"
 	"github.com/dxas90/pangolin-gateway-controller/pkg/testutil"
 	"github.com/stretchr/testify/suite"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -200,6 +201,79 @@ func (s *NewtControllerTestSuite) TestReconcile_WithCredentials() {
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
 	s.Require().Zero(result.RequeueAfter)
+}
+
+// TestReconcile_GatewayBeingDeleted verifies that the newt reconciler skips
+// Gateways that have a DeletionTimestamp set — the newt VPN pod should not be
+// deployed or updated during deletion.
+func (s *NewtControllerTestSuite) TestReconcile_GatewayBeingDeleted() {
+	gateway := testutil.NewTestGateway("newt-deleting", s.testNamespace)
+	gateway.Labels = map[string]string{controller.SiteIDLabel: "12345"}
+	gateway.Finalizers = []string{controller.FinalizerName}
+
+	err := s.Client().Create(s.Context(), gateway)
+	s.Require().NoError(err)
+
+	// Mark for deletion
+	err = s.Client().Delete(s.Context(), gateway)
+	s.Require().NoError(err)
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name: "newt-deleting", Namespace: s.testNamespace,
+	}}
+	result, err := s.reconciler.Reconcile(s.Context(), req)
+	s.Require().NoError(err)
+	s.Require().Zero(result.RequeueAfter, "should not requeue when gateway is deleting")
+
+	// No Pangolin API calls or deployment operations expected
+	s.mockPangolin.AssertExpectations(s.T())
+}
+
+// TestReconcile_CredentialsSecretExistsDeploymentCreated verifies the happy path:
+// when credentials exist and ensureNewtDeployment succeeds, the Newt Deployment
+// and Service are created and the reconcile succeeds with no requeue.
+func (s *NewtControllerTestSuite) TestReconcile_CredentialsSecretExistsDeploymentCreated() {
+	gateway := testutil.NewTestGateway("newt-deploy-ok", s.testNamespace)
+	gateway.Labels = map[string]string{controller.SiteIDLabel: "12345"}
+
+	err := s.Client().Create(s.Context(), gateway)
+	s.Require().NoError(err)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "newt-deploy-ok-newt-cred",
+			Namespace: s.testNamespace,
+		},
+		Data: map[string][]byte{
+			"NEWT_ID":           []byte("nid-abc"),
+			"NEWT_SECRET":       []byte("nsec-xyz"),
+			"PANGOLIN_ENDPOINT": []byte("https://pangolin.example.com"),
+		},
+	}
+	err = s.Client().Create(s.Context(), secret)
+	s.Require().NoError(err)
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name: "newt-deploy-ok", Namespace: s.testNamespace,
+	}}
+	result, err := s.reconciler.Reconcile(s.Context(), req)
+	s.Require().NoError(err)
+	s.Require().Zero(result.RequeueAfter, "successful deploy must not requeue")
+
+	// Verify the Newt Deployment was created in the same namespace
+	s.Eventually(func() bool {
+		deployList := &appsv1.DeploymentList{}
+		if listErr := s.Client().List(s.Context(), deployList,
+			client.InNamespace(s.testNamespace)); listErr != nil {
+			return false
+		}
+		for _, d := range deployList.Items {
+			if d.Name == "newt-deploy-ok-newt" {
+				return true
+			}
+		}
+		return false
+	}, "Newt Deployment must be created when credentials exist")
 }
 
 func TestNewtControllerSuite(t *testing.T) {

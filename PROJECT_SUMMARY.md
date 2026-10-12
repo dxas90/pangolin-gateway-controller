@@ -183,9 +183,9 @@ This project implements a production-ready Kubernetes Gateway API controller tha
 
 ## Technology Stack
 
-- **Language**: Go 1.21
-- **Framework**: controller-runtime 0.17.0
-- **Kubernetes**: client-go, Gateway API v1.0.0
+- **Language**: Go 1.27
+- **Framework**: controller-runtime v0.22.1
+- **Kubernetes**: client-go, Gateway API v1.4.1
 - **HTTP Client**: Native Go net/http
 - **Configuration**: YAML (gopkg.in/yaml.v3)
 - **Logging**: logr interface
@@ -254,32 +254,11 @@ This project implements a production-ready Kubernetes Gateway API controller tha
 - Port configuration (nginx:80, http-echo:8080)
 - Site online status in Pangolin
 
-## Next Steps for Production
+## Next Steps
 
-1. **Testing**:
-   - Add unit tests for controllers
-   - Add integration tests
-   - Add e2e tests with real Pangolin API
-
-2. **Enhancements**:
-   - Add GRPCRoute controller
-   - Implement TLS certificate management
-   - Add support for HTTPRoute filters
-   - Implement rate limiting
-   - Add circuit breakers
-
-3. **Operations**:
-   - Set up CI/CD pipeline
-   - Configure monitoring and alerting
-   - Create runbooks
-   - Performance testing
-   - Security audit
-
-4. **Documentation**:
-   - Add API documentation
-   - Create troubleshooting guides
-   - Write operational procedures
-   - Video tutorials
+1. **Webhook Validation**: Add `ValidatingWebhookConfiguration` for fast-failure on invalid Gateway/HTTPRoute configs (design documented in `IMPROVEMENTS.md`)
+2. **Helm Repository**: Publish chart to Artifact Hub with automated version bumps on release
+3. **E2E Tests**: Tests against a real Pangolin instance for full integration coverage
 
 ## File Summary
 
@@ -306,6 +285,5 @@ Apache License 2.0 - See LICENSE file
 
 ---
 
-**Status**: ✅ Complete - Ready for testing and deployment
-**Version**: v0.1.0
-**Created**: January 2026
+**Status**: ✅ Complete — v0.2.0
+**Latest Version**: v0.2.0 (2026-10-07)

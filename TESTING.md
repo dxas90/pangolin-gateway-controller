@@ -213,19 +213,18 @@ const (
 
 ## Coverage Goals
 
-Target **70%+ code coverage** for:
-- Controller reconciliation logic
-- Pangolin client operations
-- Error handling paths
-- Status updates
+Minimum coverage targets (do not regress):
+
+- `pkg/pangolin`: ≥96%
+- `pkg/controller`: ≥74%
 
 ```bash
-# Check coverage
-go test ./... -coverprofile=coverage.out
-go tool cover -func=coverage.out | grep total
+# Check coverage with breakdown
+make test  # generates cover.out
+go tool cover -func=cover.out | grep -v '100.0%' | grep -v 'webhook\|testutil' | sort -t% -k1 -n
 
-# View coverage HTML
-go tool cover -html=coverage.out
+# View HTML coverage report
+go tool cover -html=cover.out
 ```
 
 ## Common Test Scenarios
@@ -315,7 +314,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v4
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Install envtest
         run: |

@@ -287,12 +287,12 @@ kubectl logs -n pangolin-system -l app=pangolin-gateway-controller --tail=100 \
 ```bash
 # List Pangolin resources for your org
 curl -s -H "Authorization: Bearer $PANGOLIN_API_KEY" \
-  ${PANGOLIN_BASE_URL}/org/${PANGOLIN_ORG_ID}/resources | jq '.data.resources[] | {name,id}'
+  ${PANGOLIN_BASE_URL}/org/${PANGOLIN_ORG_ID}/public-resources | jq '.data.resources[] | {name,id}'
 
 # List targets for a given resource
 RESOURCE_ID=<id from above>
-curl -s -H "Authorization: Bearer $PANGOLIN_API_KEY" \
-  ${PANGOLIN_BASE_URL}/resource/${RESOURCE_ID}/targets | jq '.data.targets[]'
+curl -s -H "Authorization: Bearer ***" \
+  ${PANGOLIN_BASE_URL}/public-resource/${RESOURCE_ID}/targets | jq '.data.targets[]'
 ```
 
 ---

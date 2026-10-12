@@ -59,5 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config file support as alternative to environment variables
 - Example manifests for path-based routing, canary, TCP/UDP, and full integration tests
 
-[unreleased]: https://github.com/dxas90/pangolin-gateway-controller/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/dxas90/pangolin-gateway-controller/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dxas90/pangolin-gateway-controller/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dxas90/pangolin-gateway-controller/releases/tag/v0.1.0
