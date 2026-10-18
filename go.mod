@@ -2,7 +2,7 @@ module github.com/dxas90/pangolin-gateway-controller
 
 go 1.27.0
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	github.com/go-logr/logr v1.4.3
