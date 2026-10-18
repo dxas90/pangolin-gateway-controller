@@ -76,6 +76,13 @@ rules:
     verbs:
       - create
       - patch
+  - apiGroups:
+      - events.k8s.io
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
   # Discovery for service endpoints
   - apiGroups:
       - discovery.k8s.io
