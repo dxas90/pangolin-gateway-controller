@@ -22,6 +22,9 @@ var (
 			Name:    "pangolin_gateway_reconcile_duration_seconds",
 			Help:    "Time spent in reconciliation",
 			Buckets: prometheus.DefBuckets,
+			// NativeHistogramBucketFactor enables high-resolution sparse histograms
+			// on Prometheus >= 2.40. Classic fixed buckets remain for older scrapers.
+			NativeHistogramBucketFactor: 1.1,
 		},
 		[]string{"controller"},
 	)
@@ -41,6 +44,9 @@ var (
 			Name:    "pangolin_api_request_duration_seconds",
 			Help:    "Pangolin API request duration in seconds",
 			Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+			// NativeHistogramBucketFactor enables high-resolution sparse histograms
+			// on Prometheus >= 2.40. Classic fixed buckets remain for older scrapers.
+			NativeHistogramBucketFactor: 1.1,
 		},
 		[]string{"endpoint", "method"},
 	)
