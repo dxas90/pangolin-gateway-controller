@@ -107,6 +107,10 @@ func main() {
 		LeaderElection:          cfg.Controller.LeaderElection,
 		LeaderElectionID:        cfg.Controller.LeaderElectionID,
 		LeaderElectionNamespace: cfg.Controller.LeaderElectionNamespace,
+		// Release the leader lock immediately on graceful shutdown so a new replica
+		// can acquire leadership without waiting out the full LeaseDuration.
+		// Safe because the binary exits as soon as mgr.Start() returns.
+		LeaderElectionReleaseOnCancel: true,
 		Cache: cache.Options{
 			SyncPeriod: &syncPeriod,
 		},

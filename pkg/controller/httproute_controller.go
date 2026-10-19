@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -197,7 +198,7 @@ func (r *HTTPRouteReconciler) handleDelete(ctx context.Context, route *gatewayv1
 
 	if len(deletionErrors) > 0 {
 		log.Info("Some Pangolin resources could not be deleted, will retry", "errorCount", len(deletionErrors))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, fmt.Errorf("failed to delete %d Pangolin resource(s), will retry", len(deletionErrors))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, stderrors.Join(deletionErrors...)
 	}
 
 	original := route.DeepCopy()

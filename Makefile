@@ -1,6 +1,6 @@
 # Image URL to use all building/pushing image targets
 IMAGE_TAG_BASE ?= pangolin-gateway-controller
-VERSION ?= 0.1.0
+VERSION ?= 0.2.0
 IMG ?= $(IMAGE_TAG_BASE):$(VERSION)
 
 # Pin toolchain to match go.mod (avoids golang.org/x/net Go 1.26 stdlib incompatibility)
@@ -36,7 +36,7 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 # Tool versions
 ENVTEST_VERSION ?= release-0.19
-GOLANGCI_LINT_VERSION ?= v1.57.2
+GOLANGCI_LINT_VERSION ?= v1.64.8
 
 .PHONY: all
 all: build
