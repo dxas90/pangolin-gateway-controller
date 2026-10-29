@@ -153,6 +153,18 @@ func (r *TCPRouteReconciler) reconcileTCPRoute(ctx context.Context, route *gatew
 	anyGatewayNotReady := false
 
 	for _, parentRef := range route.Spec.ParentRefs {
+		// Skip parentRefs that explicitly target a non-Gateway resource type.
+		// Default Group is gateway.networking.k8s.io and default Kind is Gateway;
+		// if either is set to something else this controller cannot handle it.
+		if parentRef.Group != nil && string(*parentRef.Group) != gatewayv1.GroupName {
+			log.V(1).Info("Skipping parentRef with unsupported group", "group", string(*parentRef.Group))
+			continue
+		}
+		if parentRef.Kind != nil && string(*parentRef.Kind) != "Gateway" {
+			log.V(1).Info("Skipping parentRef with unsupported kind", "kind", string(*parentRef.Kind))
+			continue
+		}
+
 		gatewayName := string(parentRef.Name)
 		gatewayNamespace := route.Namespace
 		if parentRef.Namespace != nil {
