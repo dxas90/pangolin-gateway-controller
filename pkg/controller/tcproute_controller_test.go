@@ -109,7 +109,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "tcp-backend", Namespace: s.testNamespace},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: "10.96.55.1",
+			ClusterIP: "10.0.0.55",
 			Ports: []corev1.ServicePort{
 				{Port: 9000, Protocol: corev1.ProtocolTCP},
 			},
@@ -182,6 +182,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 // TestReconcile_NoParentGateway verifies that when the route has no parentRefs
 // the controller requeues after 30s.
 func (s *TCPRouteControllerTestSuite) TestReconcile_NoParentGateway() {
+	port := gatewayv1.PortNumber(9000)
 	route := &gatewayv1.TCPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tcp-route-no-parent",
@@ -191,7 +192,14 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_NoParentGateway() {
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{},
 			},
-			Rules: []gatewayv1.TCPRouteRule{},
+			Rules: []gatewayv1.TCPRouteRule{{
+				BackendRefs: []gatewayv1.BackendRef{{
+					BackendObjectReference: gatewayv1.BackendObjectReference{
+						Name: "dummy-svc",
+						Port: &port,
+					},
+				}},
+			}},
 		},
 	}
 	err := s.Client().Create(s.Context(), route)
@@ -214,6 +222,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_GatewayNotReady() {
 	err := s.Client().Create(s.Context(), gateway)
 	s.Require().NoError(err)
 
+	port := gatewayv1.PortNumber(9000)
 	route := &gatewayv1.TCPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tcp-route-gw-not-ready",
@@ -223,7 +232,14 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_GatewayNotReady() {
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{{Name: "tcp-gw-not-ready"}},
 			},
-			Rules: []gatewayv1.TCPRouteRule{},
+			Rules: []gatewayv1.TCPRouteRule{{
+				BackendRefs: []gatewayv1.BackendRef{{
+					BackendObjectReference: gatewayv1.BackendObjectReference{
+						Name: "dummy-svc",
+						Port: &port,
+					},
+				}},
+			}},
 		},
 	}
 	err = s.Client().Create(s.Context(), route)
@@ -248,6 +264,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_Delete() {
 	err := s.Client().Create(s.Context(), gateway)
 	s.Require().NoError(err)
 
+	port := gatewayv1.PortNumber(9000)
 	route := &gatewayv1.TCPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "tcp-route-del",
@@ -259,7 +276,14 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_Delete() {
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{{Name: "tcp-gw-del"}},
 			},
-			Rules: []gatewayv1.TCPRouteRule{},
+			Rules: []gatewayv1.TCPRouteRule{{
+				BackendRefs: []gatewayv1.BackendRef{{
+					BackendObjectReference: gatewayv1.BackendObjectReference{
+						Name: "dummy-svc",
+						Port: &port,
+					},
+				}},
+			}},
 		},
 	}
 	err = s.Client().Create(s.Context(), route)
