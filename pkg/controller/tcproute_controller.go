@@ -27,7 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
@@ -57,7 +56,7 @@ func (r *TCPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	ctx, cancel := context.WithTimeout(ctx, ReconcileTimeout)
 	defer cancel()
 
-	route := &gatewayv1alpha2.TCPRoute{}
+	route := &gatewayv1.TCPRoute{}
 	if err := r.Get(ctx, req.NamespacedName, route); err != nil {
 		if errors.IsNotFound(err) {
 			log.Info("TCPRoute resource not found, likely deleted")
@@ -92,7 +91,7 @@ func (r *TCPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // handleTCPDelete removes the Pangolin resource associated with this TCPRoute
 // and strips the finalizer so Kubernetes can complete deletion.
-func (r *TCPRouteReconciler) handleTCPDelete(ctx context.Context, route *gatewayv1alpha2.TCPRoute, log logr.Logger) (ctrl.Result, error) {
+func (r *TCPRouteReconciler) handleTCPDelete(ctx context.Context, route *gatewayv1.TCPRoute, log logr.Logger) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(route, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
@@ -125,36 +124,102 @@ func (r *TCPRouteReconciler) handleTCPDelete(ctx context.Context, route *gateway
 	return ctrl.Result{}, nil
 }
 
+// managedParent holds resolved information for a single parentRef managed by
+// this controller.
+type tcpManagedParent struct {
+	parentRef gatewayv1.ParentReference
+	gateway   *gatewayv1.Gateway
+	proxyPort int
+	siteID    int
+}
+
 // reconcileTCPRoute ensures a Pangolin resource and target exist for the route.
-func (r *TCPRouteReconciler) reconcileTCPRoute(ctx context.Context, route *gatewayv1alpha2.TCPRoute, log logr.Logger) (ctrl.Result, error) {
+func (r *TCPRouteReconciler) reconcileTCPRoute(ctx context.Context, route *gatewayv1.TCPRoute, log logr.Logger) (ctrl.Result, error) {
 	if len(route.Spec.ParentRefs) == 0 {
 		log.Info("No parent gateway references found")
-		r.updateTCPRouteStatus(ctx, route, false, "NoParentGateway", "No parent gateway references configured")
+		// If a resource was previously created, clean it up now that the route
+		// has no parents.
+		if resourceID := route.Labels[ResourceIDLabel]; resourceID != "" {
+			if err := r.deleteTCPPangolinResource(ctx, resourceID, route, log); err != nil {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	parentRef := route.Spec.ParentRefs[0]
-	gatewayName := string(parentRef.Name)
-	gatewayNamespace := route.Namespace
-	if parentRef.Namespace != nil {
-		gatewayNamespace = string(*parentRef.Namespace)
+	// Collect all parent gateways managed by this controller and resolve each
+	// to a proxyPort + siteID pair.
+	var managed []tcpManagedParent
+	anyGatewayNotReady := false
+
+	for _, parentRef := range route.Spec.ParentRefs {
+		gatewayName := string(parentRef.Name)
+		gatewayNamespace := route.Namespace
+		if parentRef.Namespace != nil {
+			gatewayNamespace = string(*parentRef.Namespace)
+		}
+
+		gateway := &gatewayv1.Gateway{}
+		if err := r.Get(ctx, types.NamespacedName{Name: gatewayName, Namespace: gatewayNamespace}, gateway); err != nil {
+			log.V(1).Info("Failed to get parent Gateway", "gateway", gatewayName, "error", err)
+			r.updateTCPRouteStatus(ctx, route, parentRef, false, "ParentGatewayNotFound", "Parent gateway not found")
+			continue
+		}
+
+		if string(gateway.Spec.GatewayClassName) != r.Config.GatewayClassName {
+			log.V(1).Info("Parent gateway not managed by this controller, skipping",
+				"gateway", gatewayName, "gatewayClass", gateway.Spec.GatewayClassName)
+			continue
+		}
+
+		// Validate that the parentRef points to a TCP listener. Reject if the
+		// section name is given but does not match, or the matched listener is
+		// not TCP protocol.
+		listenerPort, ok := resolveTCPListenerPort(gateway, parentRef)
+		if !ok {
+			sectionHint := ""
+			if parentRef.SectionName != nil {
+				sectionHint = string(*parentRef.SectionName)
+			}
+			log.Info("No matching TCP listener for parentRef", "gateway", gatewayName, "sectionName", sectionHint)
+			r.updateTCPRouteStatus(ctx, route, parentRef, false, "NoMatchingListener",
+				"No matching TCP listener found on parent gateway")
+			continue
+		}
+
+		siteIDStr := gateway.Labels[SiteIDLabel]
+		if siteIDStr == "" {
+			log.Info("Gateway does not have site ID yet", "gateway", gatewayName)
+			r.updateTCPRouteStatus(ctx, route, parentRef, false, "GatewayNotReady", "Parent gateway is not ready")
+			anyGatewayNotReady = true
+			continue
+		}
+
+		siteID, err := strconv.Atoi(siteIDStr)
+		if err != nil {
+			log.Error(err, "Invalid site ID label on Gateway", "siteIDStr", siteIDStr)
+			r.updateTCPRouteStatus(ctx, route, parentRef, false, "InvalidSiteID",
+				fmt.Sprintf("Invalid site ID: %s", siteIDStr))
+			continue
+		}
+
+		managed = append(managed, tcpManagedParent{
+			parentRef: parentRef,
+			gateway:   gateway,
+			proxyPort: listenerPort,
+			siteID:    siteID,
+		})
 	}
 
-	gateway := &gatewayv1.Gateway{}
-	if err := r.Get(ctx, types.NamespacedName{Name: gatewayName, Namespace: gatewayNamespace}, gateway); err != nil {
-		log.Error(err, "Failed to get parent Gateway")
-		r.updateTCPRouteStatus(ctx, route, false, "ParentGatewayNotFound", "Parent gateway not found")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	if len(managed) == 0 {
+		if anyGatewayNotReady {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		log.Info("No managed parent gateways found")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Only reconcile routes whose parent Gateway is managed by this controller class.
-	if string(gateway.Spec.GatewayClassName) != r.Config.GatewayClassName {
-		log.V(1).Info("Parent gateway not managed by this controller, skipping",
-			"gatewayClass", gateway.Spec.GatewayClassName)
-		return ctrl.Result{}, nil
-	}
-
-	// Add finalizer after confirming the gateway is ours.
+	// Add finalizer after confirming at least one gateway is ours.
 	if !controllerutil.ContainsFinalizer(route, FinalizerName) {
 		original := route.DeepCopy()
 		controllerutil.AddFinalizer(route, FinalizerName)
@@ -164,28 +229,23 @@ func (r *TCPRouteReconciler) reconcileTCPRoute(ctx context.Context, route *gatew
 		}
 	}
 
+	// Use the first managed parent as the primary for the Pangolin resource.
+	primary := managed[0]
+	siteID := primary.siteID
+	proxyPort := primary.proxyPort
+	gateway := primary.gateway
 	siteIDStr := gateway.Labels[SiteIDLabel]
-	if siteIDStr == "" {
-		log.Info("Gateway does not have site ID yet")
-		r.updateTCPRouteStatus(ctx, route, false, "GatewayNotReady", "Parent gateway is not ready")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	siteID, err := strconv.Atoi(siteIDStr)
-	if err != nil {
-		log.Error(err, "Invalid site ID label on Gateway", "siteIDStr", siteIDStr)
-		r.updateTCPRouteStatus(ctx, route, false, "InvalidSiteID", fmt.Sprintf("Invalid site ID: %s", siteIDStr))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	proxyPort := resolveListenerPort(gateway, parentRef)
 
 	resourceID := route.Labels[ResourceIDLabel]
 	if resourceID == "" {
-		newID, err := r.createTCPPangolinResource(ctx, route, gateway, siteID, proxyPort, log)
+		// Adopt existing resource by name before creating a new one to prevent
+		// duplicate resources when the label was lost.
+		newID, err := r.adoptOrCreateTCPResource(ctx, route, gateway, siteID, proxyPort, log)
 		if err != nil {
 			log.Error(err, "Failed to create Pangolin resource")
-			r.updateTCPRouteStatus(ctx, route, false, "ResourceCreationFailed", sanitizeEventMessage(err))
+			for _, p := range managed {
+				r.updateTCPRouteStatus(ctx, route, p.parentRef, false, "ResourceCreationFailed", sanitizeEventMessage(err))
+			}
 			r.Recorder.Eventf(route, corev1.EventTypeWarning, "ResourceCreationFailed",
 				"Failed to create Pangolin resource: %s", sanitizeEventMessage(err))
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
@@ -201,12 +261,14 @@ func (r *TCPRouteReconciler) reconcileTCPRoute(ctx context.Context, route *gatew
 			log.Error(err, "Failed to patch resource ID label")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 		}
-		log.Info("Created Pangolin resource", "resourceID", resourceID)
+		log.Info("Adopted or created Pangolin resource", "resourceID", resourceID)
 		r.Recorder.Eventf(route, corev1.EventTypeNormal, "ResourceCreated", "Created Pangolin resource %s", resourceID)
 	} else {
 		if err := r.verifyOrRecreateTCPResource(ctx, route, gateway, siteID, proxyPort, resourceID, log); err != nil {
 			log.Error(err, "Failed to verify/recreate resource")
-			r.updateTCPRouteStatus(ctx, route, false, "ResourceVerificationFailed", sanitizeEventMessage(err))
+			for _, p := range managed {
+				r.updateTCPRouteStatus(ctx, route, p.parentRef, false, "ResourceVerificationFailed", sanitizeEventMessage(err))
+			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 		}
 		if updated := route.Labels[ResourceIDLabel]; updated != "" {
@@ -223,42 +285,109 @@ func (r *TCPRouteReconciler) reconcileTCPRoute(ctx context.Context, route *gatew
 			if patchErr := r.Patch(ctx, gateway, client.MergeFrom(original)); patchErr != nil {
 				log.Error(patchErr, "Failed to clear gateway site-id label")
 			}
-			r.updateTCPRouteStatus(ctx, route, false, "SiteGone", "Parent gateway site was deleted; waiting for recreation")
+			for _, p := range managed {
+				r.updateTCPRouteStatus(ctx, route, p.parentRef, false, "SiteGone", "Parent gateway site was deleted; waiting for recreation")
+			}
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 		log.Error(err, "Failed to reconcile TCP targets")
-		r.updateTCPRouteStatus(ctx, route, false, "TargetError", sanitizeEventMessage(err))
+		for _, p := range managed {
+			r.updateTCPRouteStatus(ctx, route, p.parentRef, false, "TargetError", sanitizeEventMessage(err))
+		}
 		r.Recorder.Eventf(route, corev1.EventTypeWarning, "TargetError", "Failed to reconcile targets: %s", sanitizeEventMessage(err))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	r.updateTCPRouteStatus(ctx, route, true, "Accepted", "TCPRoute is configured in Pangolin")
+	for _, p := range managed {
+		r.updateTCPRouteStatus(ctx, route, p.parentRef, true, "Accepted", "TCPRoute is configured in Pangolin")
+	}
 	r.Recorder.Eventf(route, corev1.EventTypeNormal, "Accepted", "TCPRoute configured in Pangolin")
 	log.Info("Successfully reconciled TCPRoute", "resourceID", resourceID)
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-// resolveListenerPort returns the port number from the Gateway listener that
-// matches parentRef.SectionName, falling back to the first listener's port.
-func resolveListenerPort(gateway *gatewayv1.Gateway, parentRef gatewayv1.ParentReference) int {
+// resolveTCPListenerPort returns the listener port and true when the parentRef
+// maps to a TCP-protocol listener on the gateway. Returns (0, false) when:
+//   - sectionName is specified but no listener with that name exists
+//   - the matched listener's protocol is not TCPProtocolType
+//   - no TCP listener exists at all (when sectionName is absent)
+func resolveTCPListenerPort(gateway *gatewayv1.Gateway, parentRef gatewayv1.ParentReference) (int, bool) {
 	if parentRef.SectionName != nil {
 		for _, listener := range gateway.Spec.Listeners {
 			if listener.Name == *parentRef.SectionName {
-				return int(listener.Port)
+				if listener.Protocol != gatewayv1.TCPProtocolType {
+					return 0, false
+				}
+				return int(listener.Port), true
+			}
+		}
+		return 0, false // named section not found
+	}
+	// No sectionName: use the first TCP listener.
+	for _, listener := range gateway.Spec.Listeners {
+		if listener.Protocol == gatewayv1.TCPProtocolType {
+			return int(listener.Port), true
+		}
+	}
+	return 0, false
+}
+
+// deleteTCPPangolinResource removes a Pangolin resource by ID and clears the
+// route's ResourceIDLabel. 404 errors are treated as already-deleted.
+func (r *TCPRouteReconciler) deleteTCPPangolinResource(ctx context.Context, resourceID string, route *gatewayv1.TCPRoute, log logr.Logger) error {
+	if err := r.PangolinClient.DeleteResource(ctx, resourceID); err != nil {
+		if apiErr, ok := pangolin.AsAPIError(err); ok && apiErr.StatusCode == 404 {
+			log.Info("Resource already deleted (404)", "resourceID", resourceID)
+		} else {
+			return fmt.Errorf("failed to delete Pangolin resource %s: %w", resourceID, err)
+		}
+	}
+	original := route.DeepCopy()
+	delete(route.Labels, ResourceIDLabel)
+	if err := r.Patch(ctx, route, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("failed to clear resource ID label: %w", err)
+	}
+	log.Info("Deleted Pangolin resource and cleared label", "resourceID", resourceID)
+	return nil
+}
+
+// adoptOrCreateTCPResource looks for an existing Pangolin resource by the
+// expected name and adopts it if found; otherwise creates a new one.
+// This prevents duplicate resources when the ResourceIDLabel was lost.
+func (r *TCPRouteReconciler) adoptOrCreateTCPResource(
+	ctx context.Context,
+	route *gatewayv1.TCPRoute,
+	gateway *gatewayv1.Gateway,
+	siteID int,
+	proxyPort int,
+	log logr.Logger,
+) (string, error) {
+	expectedName := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
+
+	resources, err := r.PangolinClient.ListResources(ctx)
+	if err != nil {
+		log.V(1).Info("Could not list resources for adopt check, proceeding to create", "error", err)
+	} else {
+		for _, res := range resources {
+			if resName, _ := res["name"].(string); resName == expectedName {
+				if id := fmt.Sprintf("%v", res["resourceId"]); id != "" && id != "<nil>" {
+					log.Info("Adopted existing Pangolin resource by name", "resourceID", id, "name", expectedName)
+					r.Recorder.Eventf(route, corev1.EventTypeNormal, "ResourceAdopted",
+						"Adopted existing Pangolin resource %s", id)
+					return id, nil
+				}
 			}
 		}
 	}
-	if len(gateway.Spec.Listeners) > 0 {
-		return int(gateway.Spec.Listeners[0].Port)
-	}
-	return 0
+
+	return r.createTCPPangolinResource(ctx, route, gateway, siteID, proxyPort, log)
 }
 
 // createTCPPangolinResource creates a new Pangolin resource for this TCPRoute.
 // TCPRoutes use "tcp" mode, indicating a raw TCP passthrough tunnel.
 func (r *TCPRouteReconciler) createTCPPangolinResource(
 	ctx context.Context,
-	route *gatewayv1alpha2.TCPRoute,
+	route *gatewayv1.TCPRoute,
 	gateway *gatewayv1.Gateway,
 	siteID int,
 	proxyPort int,
@@ -298,7 +427,7 @@ func (r *TCPRouteReconciler) createTCPPangolinResource(
 // recreates it if it was deleted externally (drift detection/recovery).
 func (r *TCPRouteReconciler) verifyOrRecreateTCPResource(
 	ctx context.Context,
-	route *gatewayv1alpha2.TCPRoute,
+	route *gatewayv1.TCPRoute,
 	gateway *gatewayv1.Gateway,
 	siteID int,
 	proxyPort int,
@@ -345,11 +474,20 @@ func (r *TCPRouteReconciler) verifyOrRecreateTCPResource(
 		return r.recreateTCPResource(ctx, route, gateway, siteID, proxyPort, resourceID, log)
 	}
 
-	// Resource exists — log name drift (informational)
+	// Resource exists — log name drift (informational).
 	expectedName := fmt.Sprintf("%s-%s", route.Namespace, route.Name)
 	if name, ok := found["name"].(string); ok && name != expectedName {
 		log.Info("Resource name drift detected (cannot auto-correct)",
 			"resourceID", resourceID, "expected", expectedName, "actual", name)
+	}
+
+	// Log proxyPort drift. The Pangolin Integration API does not support PATCH,
+	// so automatic correction is not possible; manual intervention is required.
+	if proxyPort > 0 {
+		if existingPort, ok := found["proxyPort"].(float64); ok && int(existingPort) != proxyPort {
+			log.Info("proxyPort drift detected (Integration API does not support PATCH; manual correction needed)",
+				"resourceID", resourceID, "expected", proxyPort, "actual", int(existingPort))
+		}
 	}
 
 	return nil
@@ -359,7 +497,7 @@ func (r *TCPRouteReconciler) verifyOrRecreateTCPResource(
 // deleted, updates the route label with the new resource ID, and emits an Event.
 func (r *TCPRouteReconciler) recreateTCPResource(
 	ctx context.Context,
-	route *gatewayv1alpha2.TCPRoute,
+	route *gatewayv1.TCPRoute,
 	gateway *gatewayv1.Gateway,
 	siteID int,
 	proxyPort int,
@@ -388,7 +526,7 @@ func (r *TCPRouteReconciler) recreateTCPResource(
 // rules. Existing matching targets are preserved; stale targets are removed.
 func (r *TCPRouteReconciler) reconcileTCPTargets(
 	ctx context.Context,
-	route *gatewayv1alpha2.TCPRoute,
+	route *gatewayv1.TCPRoute,
 	resourceID string,
 	siteID int,
 	log logr.Logger,
@@ -413,10 +551,23 @@ func (r *TCPRouteReconciler) reconcileTCPTargets(
 	for _, rule := range route.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
 			// Skip zero-weight backends — they should not receive traffic.
+			// Note: Pangolin TCP mode does not support traffic weights;
+			// non-zero-weight backends are treated as equal-weight.
 			if backendRef.Weight != nil && *backendRef.Weight == 0 {
 				log.V(1).Info("Skipping zero-weight backend", "backend", backendRef.Name)
 				continue
 			}
+
+			// Only core (group="") Services are supported for TCP routing.
+			if backendRef.Group != nil && string(*backendRef.Group) != "" {
+				log.Info("Unsupported backend group, skipping", "group", string(*backendRef.Group), "backend", backendRef.Name)
+				continue
+			}
+			if backendRef.Kind != nil && string(*backendRef.Kind) != "Service" {
+				log.Info("Unsupported backend kind, skipping", "kind", string(*backendRef.Kind), "backend", backendRef.Name)
+				continue
+			}
+
 			if backendRef.Port == nil {
 				log.Error(nil, "BackendRef missing required Port, skipping", "backend", string(backendRef.Name))
 				continue
@@ -428,9 +579,16 @@ func (r *TCPRouteReconciler) reconcileTCPTargets(
 			}
 
 			// ReferenceGrant check for cross-namespace Service references.
+			// On explicit denial (allowed=false, err=nil) the backend is skipped
+			// and orphan cleanup will remove any previously-created target.
 			if svcNS != route.Namespace {
-				if err := r.checkReferenceGrant(ctx, route.Namespace, svcNS, backendRef.Name); err != nil {
-					return fmt.Errorf("ReferenceGrant denied for %s/%s: %w", svcNS, backendRef.Name, err)
+				allowed, err := r.checkReferenceGrant(ctx, route.Namespace, svcNS, backendRef.Name)
+				if err != nil {
+					return fmt.Errorf("failed to check ReferenceGrant for %s/%s: %w", svcNS, backendRef.Name, err)
+				}
+				if !allowed {
+					log.Info("ReferenceGrant denied, skipping backend", "namespace", svcNS, "service", backendRef.Name)
+					continue
 				}
 			}
 
@@ -449,35 +607,55 @@ func (r *TCPRouteReconciler) reconcileTCPTargets(
 				log.Info("Service has no ClusterIP, skipping", "service", string(backendRef.Name))
 				continue
 			}
-			desired[endpoint{ip: ip, port: int(*backendRef.Port)}] = true
+
+			// Verify the service exposes a matching TCP port before creating a target.
+			portNum := int(*backendRef.Port)
+			hasPort := false
+			for _, sp := range svc.Spec.Ports {
+				if int(sp.Port) == portNum && (sp.Protocol == "" || sp.Protocol == corev1.ProtocolTCP) {
+					hasPort = true
+					break
+				}
+			}
+			if !hasPort {
+				log.Info("Service has no matching TCP port, skipping", "service", backendRef.Name, "port", portNum)
+				continue
+			}
+
+			desired[endpoint{ip: ip, port: portNum}] = true
 		}
 	}
 
-	// Determine which existing targets match a desired endpoint.
+	// Determine which existing targets match a desired endpoint. A target must
+	// be enabled to count as matched; disabled targets will be deleted and
+	// recreated so they are reliably in service.
 	matchedIDs := map[string]bool{}
 	for _, t := range existingTargets {
 		tIP, _ := t["ip"].(string)
 		tPort, _ := t["port"].(float64)
 		tSiteID, _ := t["siteId"].(float64)
+		tEnabled, _ := t["enabled"].(bool)
 		rawTargetID := t["targetId"]
 		if rawTargetID == nil {
 			continue
 		}
 		tID := fmt.Sprintf("%v", rawTargetID)
 		ep := endpoint{ip: tIP, port: int(tPort)}
-		if desired[ep] && int(tSiteID) == siteID {
+		if desired[ep] && int(tSiteID) == siteID && tEnabled {
 			matchedIDs[tID] = true
 		}
 	}
 
-	// Create missing desired targets.
+	// Create missing desired targets. A target only qualifies as existing if it
+	// is enabled; disabled targets will be deleted and recreated below.
 	for ep := range desired {
 		alreadyExists := false
 		for _, t := range existingTargets {
 			tIP, _ := t["ip"].(string)
 			tPort, _ := t["port"].(float64)
 			tSiteID, _ := t["siteId"].(float64)
-			if tIP == ep.ip && int(tPort) == ep.port && int(tSiteID) == siteID {
+			tEnabled, _ := t["enabled"].(bool)
+			if tIP == ep.ip && int(tPort) == ep.port && int(tSiteID) == siteID && tEnabled {
 				alreadyExists = true
 				break
 			}
@@ -524,14 +702,16 @@ func (r *TCPRouteReconciler) reconcileTCPTargets(
 
 // checkReferenceGrant verifies that a ReferenceGrant in toNamespace permits
 // a TCPRoute in fromNamespace to reference the named Service.
+// Returns (true, nil) when permitted, (false, nil) when explicitly denied
+// (no matching grant), and (false, err) on a lookup failure.
 func (r *TCPRouteReconciler) checkReferenceGrant(
 	ctx context.Context,
 	fromNamespace, toNamespace string,
 	svcName gatewayv1.ObjectName,
-) error {
+) (bool, error) {
 	var grants gatewayv1beta1.ReferenceGrantList
 	if err := r.List(ctx, &grants, client.InNamespace(toNamespace)); err != nil {
-		return fmt.Errorf("failed to list ReferenceGrants in %s: %w", toNamespace, err)
+		return false, fmt.Errorf("failed to list ReferenceGrants in %s: %w", toNamespace, err)
 	}
 	for _, grant := range grants.Items {
 		for _, from := range grant.Spec.From {
@@ -539,18 +719,17 @@ func (r *TCPRouteReconciler) checkReferenceGrant(
 				string(from.Kind) == "TCPRoute" &&
 				string(from.Namespace) == fromNamespace {
 				for _, to := range grant.Spec.To {
-					if (string(to.Group) == "" || string(to.Group) == "core") &&
-						string(to.Kind) == "Service" {
+					// Core API group is represented as empty string only, not "core".
+					if string(to.Group) == "" && string(to.Kind) == "Service" {
 						if to.Name == nil || *to.Name == svcName {
-							return nil
+							return true, nil
 						}
 					}
 				}
 			}
 		}
 	}
-	return fmt.Errorf("no ReferenceGrant allows TCPRoute in %s to reference Service %s/%s",
-		fromNamespace, toNamespace, svcName)
+	return false, nil
 }
 
 // tcpParentRefKey produces a unique string key for a ParentReference to
@@ -571,23 +750,20 @@ func tcpParentRefKey(pr gatewayv1.ParentReference) string {
 	return ns + "/" + string(pr.Name) + "/" + section + "/" + port
 }
 
-// updateTCPRouteStatus writes a RouteParentStatus condition to the TCPRoute,
-// preserving LastTransitionTime when the status has not changed.
+// updateTCPRouteStatus writes a RouteParentStatus condition to the TCPRoute
+// for the given parentRef, preserving LastTransitionTime when unchanged.
 func (r *TCPRouteReconciler) updateTCPRouteStatus(
 	ctx context.Context,
-	route *gatewayv1alpha2.TCPRoute,
+	route *gatewayv1.TCPRoute,
+	parentRef gatewayv1.ParentReference,
 	accepted bool,
 	reason, message string,
 ) {
-	if len(route.Spec.ParentRefs) == 0 {
-		return
-	}
 	key := client.ObjectKeyFromObject(route)
-	parentRef := route.Spec.ParentRefs[0]
 	parentKey := tcpParentRefKey(parentRef)
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		current := &gatewayv1alpha2.TCPRoute{}
+		current := &gatewayv1.TCPRoute{}
 		if err := r.Get(ctx, key, current); err != nil {
 			return err
 		}
@@ -604,7 +780,7 @@ func (r *TCPRouteReconciler) updateTCPRouteStatus(
 			LastTransitionTime: metav1.Now(),
 		}
 
-		// Preserve LastTransitionTime if this parent+controller status hasn't changed.
+		// Preserve LastTransitionTime if the condition hasn't changed.
 		for _, ps := range current.Status.Parents {
 			if tcpParentRefKey(ps.ParentRef) == parentKey &&
 				string(ps.ControllerName) == ControllerName {
@@ -658,7 +834,7 @@ func (r *TCPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("tcproute").
-		For(&gatewayv1alpha2.TCPRoute{},
+		For(&gatewayv1.TCPRoute{},
 			builder.WithPredicates(predicate.Or(
 				predicate.GenerationChangedPredicate{},
 				deletionTrigger,
@@ -667,7 +843,7 @@ func (r *TCPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Enqueue all TCPRoutes whose parent Gateway changed (e.g. site ID label added).
 		Watches(&gatewayv1.Gateway{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				var routes gatewayv1alpha2.TCPRouteList
+				var routes gatewayv1.TCPRouteList
 				if err := mgr.GetClient().List(ctx, &routes); err != nil {
 					return nil
 				}
@@ -694,7 +870,7 @@ func (r *TCPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Enqueue all TCPRoutes referencing a Service whose ClusterIP changed.
 		Watches(&corev1.Service{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				var routes gatewayv1alpha2.TCPRouteList
+				var routes gatewayv1.TCPRouteList
 				if err := mgr.GetClient().List(ctx, &routes); err != nil {
 					return nil
 				}

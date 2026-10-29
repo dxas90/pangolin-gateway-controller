@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
 // TCPRouteControllerTestSuite exercises the TCPRouteReconciler against a real
@@ -58,7 +57,7 @@ func (s *TCPRouteControllerTestSuite) TearDownTest() {
 	ctx := s.Context()
 	ns := client.InNamespace(s.testNamespace)
 
-	var tcpRoutes gatewayv1alpha2.TCPRouteList
+	var tcpRoutes gatewayv1.TCPRouteList
 	_ = s.Client().List(ctx, &tcpRoutes, ns)
 	for i := range tcpRoutes.Items {
 		route := &tcpRoutes.Items[i]
@@ -80,12 +79,29 @@ func (s *TCPRouteControllerTestSuite) TearDownTest() {
 	}
 }
 
+// newTCPGateway returns a Gateway with a TCP listener, suitable for TCPRoute tests.
+func newTCPGateway(name, namespace string, labels map[string]string) *gatewayv1.Gateway {
+	gw := testutil.NewTestGateway(name, namespace)
+	gw.Spec.Listeners = []gatewayv1.Listener{{
+		Name:     "tcp",
+		Protocol: gatewayv1.TCPProtocolType,
+		Port:     9000,
+	}}
+	if labels != nil {
+		for k, v := range labels {
+			gw.Labels[k] = v
+		}
+	}
+	return gw
+}
+
 // TestReconcile_HappyPath verifies that when a Gateway with a valid site ID
 // exists, the reconciler creates a Pangolin resource and target, and sets the
 // route status to Accepted.
 func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
-	gateway := testutil.NewTestGateway("tcp-gw-happy", s.testNamespace)
-	gateway.Labels = map[string]string{controller.SiteIDLabel: testutil.TestSiteID}
+	gateway := newTCPGateway("tcp-gw-happy", s.testNamespace, map[string]string{
+		controller.SiteIDLabel: testutil.TestSiteID,
+	})
 	err := s.Client().Create(s.Context(), gateway)
 	s.Require().NoError(err)
 
@@ -102,16 +118,16 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 	err = s.Client().Create(s.Context(), svc)
 	s.Require().NoError(err)
 
-	route := &gatewayv1alpha2.TCPRoute{
+	route := &gatewayv1.TCPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tcp-route-happy",
 			Namespace: s.testNamespace,
 		},
-		Spec: gatewayv1alpha2.TCPRouteSpec{
+		Spec: gatewayv1.TCPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{{Name: "tcp-gw-happy"}},
 			},
-			Rules: []gatewayv1alpha2.TCPRouteRule{{
+			Rules: []gatewayv1.TCPRouteRule{{
 				BackendRefs: []gatewayv1.BackendRef{{
 					BackendObjectReference: gatewayv1.BackendObjectReference{
 						Name: "tcp-backend",
@@ -124,6 +140,9 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 	err = s.Client().Create(s.Context(), route)
 	s.Require().NoError(err)
 
+	// adoptOrCreateTCPResource calls ListResources first; return empty so we proceed to create.
+	s.mockPangolin.On("ListResources", testutil.MockAnything).
+		Return([]map[string]any{}, nil).Once()
 	// Expect resource + target creation
 	s.mockPangolin.On("CreateResource", testutil.MockAnything, testutil.MockAnything).
 		Return(map[string]any{"resourceId": "tcp-res-1"}, nil).Once()
@@ -143,7 +162,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 
 	// Verify route status is Accepted
 	s.Eventually(func() bool {
-		fresh := &gatewayv1alpha2.TCPRoute{}
+		fresh := &gatewayv1.TCPRoute{}
 		if err := s.Client().Get(s.Context(),
 			types.NamespacedName{Name: "tcp-route-happy", Namespace: s.testNamespace},
 			fresh); err != nil {
@@ -161,18 +180,18 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 }
 
 // TestReconcile_NoParentGateway verifies that when the route has no parentRefs
-// the controller sets status NoParentGateway and requeues after 30s.
+// the controller requeues after 30s.
 func (s *TCPRouteControllerTestSuite) TestReconcile_NoParentGateway() {
-	route := &gatewayv1alpha2.TCPRoute{
+	route := &gatewayv1.TCPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tcp-route-no-parent",
 			Namespace: s.testNamespace,
 		},
-		Spec: gatewayv1alpha2.TCPRouteSpec{
+		Spec: gatewayv1.TCPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{},
 			},
-			Rules: []gatewayv1alpha2.TCPRouteRule{},
+			Rules: []gatewayv1.TCPRouteRule{},
 		},
 	}
 	err := s.Client().Create(s.Context(), route)
@@ -190,21 +209,21 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_NoParentGateway() {
 // TestReconcile_GatewayNotReady verifies that when the parent Gateway has no
 // site ID label yet (not yet provisioned), the controller requeues after 10s.
 func (s *TCPRouteControllerTestSuite) TestReconcile_GatewayNotReady() {
-	gateway := testutil.NewTestGateway("tcp-gw-not-ready", s.testNamespace)
 	// Intentionally NO SiteIDLabel
+	gateway := newTCPGateway("tcp-gw-not-ready", s.testNamespace, nil)
 	err := s.Client().Create(s.Context(), gateway)
 	s.Require().NoError(err)
 
-	route := &gatewayv1alpha2.TCPRoute{
+	route := &gatewayv1.TCPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tcp-route-gw-not-ready",
 			Namespace: s.testNamespace,
 		},
-		Spec: gatewayv1alpha2.TCPRouteSpec{
+		Spec: gatewayv1.TCPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{{Name: "tcp-gw-not-ready"}},
 			},
-			Rules: []gatewayv1alpha2.TCPRouteRule{},
+			Rules: []gatewayv1.TCPRouteRule{},
 		},
 	}
 	err = s.Client().Create(s.Context(), route)
@@ -223,23 +242,24 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_GatewayNotReady() {
 // reconciler removes the Pangolin resource and strips the finalizer so the
 // object can be garbage-collected by Kubernetes.
 func (s *TCPRouteControllerTestSuite) TestReconcile_Delete() {
-	gateway := testutil.NewTestGateway("tcp-gw-del", s.testNamespace)
-	gateway.Labels = map[string]string{controller.SiteIDLabel: testutil.TestSiteID}
+	gateway := newTCPGateway("tcp-gw-del", s.testNamespace, map[string]string{
+		controller.SiteIDLabel: testutil.TestSiteID,
+	})
 	err := s.Client().Create(s.Context(), gateway)
 	s.Require().NoError(err)
 
-	route := &gatewayv1alpha2.TCPRoute{
+	route := &gatewayv1.TCPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "tcp-route-del",
 			Namespace:  s.testNamespace,
 			Finalizers: []string{controller.FinalizerName},
 			Labels:     map[string]string{controller.ResourceIDLabel: "tcp-res-del"},
 		},
-		Spec: gatewayv1alpha2.TCPRouteSpec{
+		Spec: gatewayv1.TCPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{{Name: "tcp-gw-del"}},
 			},
-			Rules: []gatewayv1alpha2.TCPRouteRule{},
+			Rules: []gatewayv1.TCPRouteRule{},
 		},
 	}
 	err = s.Client().Create(s.Context(), route)
@@ -262,7 +282,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_Delete() {
 
 	// Finalizer removed → object should be gone
 	s.Eventually(func() bool {
-		fresh := &gatewayv1alpha2.TCPRoute{}
+		fresh := &gatewayv1.TCPRoute{}
 		return s.Client().Get(s.Context(),
 			types.NamespacedName{Name: "tcp-route-del", Namespace: s.testNamespace},
 			fresh) != nil // NotFound = finalizer removed
