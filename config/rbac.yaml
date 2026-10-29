@@ -19,6 +19,7 @@ rules:
       - gateways
       - httproutes
       - grpcroutes
+      - tcproutes
     verbs:
       - get
       - list
@@ -32,10 +33,19 @@ rules:
       - gateways/status
       - httproutes/status
       - grpcroutes/status
+      - tcproutes/status
     verbs:
       - get
       - update
       - patch
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - referencegrants
+    verbs:
+      - get
+      - list
+      - watch
   # Core K8s resources
   - apiGroups:
       - ""

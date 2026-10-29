@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
 // EnvTestSuite provides a base test suite with envtest setup.
@@ -41,6 +42,9 @@ func (s *EnvTestSuite) SetupSuite() {
 
 	err = gatewayv1alpha2.Install(scheme.Scheme)
 	s.Require().NoError(err, "failed to add Gateway API v1alpha2 scheme")
+
+	err = gatewayv1beta1.Install(scheme.Scheme)
+	s.Require().NoError(err, "failed to add Gateway API v1beta1 scheme")
 
 	// Setup envtest with Gateway API CRDs.
 	// We locate the gateway-api module in the Go module cache so CRDs are
