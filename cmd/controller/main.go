@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
 // version and buildDate are injected at build time via -ldflags.
@@ -37,6 +38,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(gatewayv1alpha2.Install(scheme))
 }
 
 func main() {
@@ -186,6 +188,19 @@ func main() {
 		Recorder:       pgctrl.NewEventRecorderAdapter(mgr.GetEventRecorder("grpcroute-controller")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create GRPCRoute controller")
+		os.Exit(1)
+	}
+
+	// Setup TCPRoute controller for raw TCP service exposure
+	if err = (&pgctrl.TCPRouteReconciler{
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("TCPRoute"),
+		Scheme:         mgr.GetScheme(),
+		PangolinClient: pangolinClient,
+		Config:         &cfg.Controller,
+		Recorder:       pgctrl.NewEventRecorderAdapter(mgr.GetEventRecorder("tcproute-controller")),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create TCPRoute controller")
 		os.Exit(1)
 	}
 
