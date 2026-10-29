@@ -92,7 +92,12 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 	port := gatewayv1.PortNumber(9000)
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "tcp-backend", Namespace: s.testNamespace},
-		Spec:       corev1.ServiceSpec{ClusterIP: "10.96.55.1"},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.96.55.1",
+			Ports: []corev1.ServicePort{
+				{Port: 9000, Protocol: corev1.ProtocolTCP},
+			},
+		},
 	}
 	err = s.Client().Create(s.Context(), svc)
 	s.Require().NoError(err)
@@ -132,7 +137,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_HappyPath() {
 	}}
 	result, err := s.reconciler.Reconcile(s.Context(), req)
 	s.Require().NoError(err)
-	s.Require().Zero(result.RequeueAfter)
+	s.Require().Equal(5*time.Minute, result.RequeueAfter)
 
 	s.mockPangolin.AssertExpectations(s.T())
 
@@ -167,6 +172,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_NoParentGateway() {
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{},
 			},
+			Rules: []gatewayv1alpha2.TCPRouteRule{},
 		},
 	}
 	err := s.Client().Create(s.Context(), route)
@@ -198,6 +204,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_GatewayNotReady() {
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{{Name: "tcp-gw-not-ready"}},
 			},
+			Rules: []gatewayv1alpha2.TCPRouteRule{},
 		},
 	}
 	err = s.Client().Create(s.Context(), route)
@@ -232,6 +239,7 @@ func (s *TCPRouteControllerTestSuite) TestReconcile_Delete() {
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{{Name: "tcp-gw-del"}},
 			},
+			Rules: []gatewayv1alpha2.TCPRouteRule{},
 		},
 	}
 	err = s.Client().Create(s.Context(), route)

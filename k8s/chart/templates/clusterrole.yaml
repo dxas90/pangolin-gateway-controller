@@ -96,6 +96,38 @@ rules:
   - grpcroutes/finalizers
   verbs:
   - update
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - tcproutes
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - tcproutes/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - tcproutes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - referencegrants
+  verbs:
+  - get
+  - list
+  - watch
 {{- end }}
 {{- if .Values.rbac.newtManagement }}
 # Core resources for Newt VPN deployment
