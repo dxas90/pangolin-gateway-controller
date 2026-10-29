@@ -4,7 +4,9 @@ package testutil
 
 import (
 	"context"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/stretchr/testify/suite"
@@ -14,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
 // EnvTestSuite provides a base test suite with envtest setup.
@@ -36,11 +39,19 @@ func (s *EnvTestSuite) SetupSuite() {
 	err := gatewayv1.Install(scheme.Scheme)
 	s.Require().NoError(err, "failed to add Gateway API scheme")
 
-	// Setup envtest with Gateway API CRDs
+	err = gatewayv1alpha2.Install(scheme.Scheme)
+	s.Require().NoError(err, "failed to add Gateway API v1alpha2 scheme")
+
+	// Setup envtest with Gateway API CRDs.
+	// We locate the gateway-api module in the Go module cache so CRDs are
+	// always available without vendoring.
+	gwapiCRDBase := gatewayAPICRDPath()
 	s.testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd"),
-			// Gateway API CRDs will be installed from the module
+			filepath.Join(gwapiCRDBase, "standard"),
+			// Experimental CRDs (v1alpha2: TCPRoute, TLSRoute, ...)
+			filepath.Join(gwapiCRDBase, "experimental"),
 		},
 		ErrorIfCRDPathMissing: false,
 	}
@@ -109,4 +120,20 @@ func (s *EnvTestSuite) EventuallyWithTimeout(condition func() bool, timeout time
 		100*time.Millisecond,
 		msgAndArgs...,
 	)
+}
+
+// gatewayAPICRDPath returns the path to the gateway-api CRD directory in the
+// Go module cache. It runs `go list` to find the exact module version on disk.
+func gatewayAPICRDPath() string {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "sigs.k8s.io/gateway-api").Output()
+	if err == nil {
+		dir := strings.TrimSpace(string(out))
+		if dir != "" {
+			return filepath.Join(dir, "config", "crd")
+		}
+	}
+	// Fallback: construct from GOMODCACHE directly
+	cacheOut, _ := exec.Command("go", "env", "GOMODCACHE").Output()
+	cache := strings.TrimSpace(string(cacheOut))
+	return filepath.Join(cache, "sigs.k8s.io", "gateway-api@v1.6.3", "config", "crd")
 }

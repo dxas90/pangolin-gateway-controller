@@ -95,7 +95,7 @@ make deploy-examples
 4. **GRPCRoute Reconciler** (`pkg/controller/grpcroute_controller.go`)
    - Handles TCP/UDP services
    - Protocol specified via annotation: `gateway.pangolin.net/protocol` (tcp/udp)
-   - Creates Pangolin resources with `mode: tcp` or `mode: udp` (1.19.x canonical field)
+   - Creates Pangolin resources with `mode: tcp` or `mode: udp` (canonical field since 1.19.x)
 
 5. **Pangolin Client** (`pkg/pangolin/client.go`)
    - REST API wrapper for Pangolin Integration API
@@ -242,7 +242,7 @@ curl -H "Authorization: Bearer $PANGOLIN_API_KEY" \
 
 ## Pangolin API Version Compatibility
 
-- **Targeting**: Pangolin 1.19.2 (verified against tag `1.19.2-37-g963e9da7d` in `references/pangolin/`)
+- **Targeting**: Pangolin 1.25.3 (verified against tag `1.25.3` in `references/pangolin/`)
 - **Breaking change in 1.16.0**: `GET /org/{orgId}/sites` and `GET /org/{orgId}/resources` changed pagination:
   - Old (≤1.15.x): `?limit=1000&offset=0` — **default 1000 items**
   - New (1.16.0+): `?pageSize=20&page=1` — **default dropped to 20 items**
@@ -254,10 +254,18 @@ curl -H "Authorization: Bearer $PANGOLIN_API_KEY" \
   `http|tcp|udp|ssh|rdp|vnc`). This controller now sends `mode` directly:
   - HTTPRoute → `"mode": "http"`
   - GRPCRoute → `"mode": "tcp"` or `"mode": "udp"` (driven by the `gateway.pangolin.net/protocol` annotation)
+  - TCPRoute → `"mode": "tcp"`
 - **1.19.x listResources projection**: the `listResources` response no longer includes `http`,
   `protocol`, or `subdomain` columns — it now exposes `mode`, `fullDomain`, and a richer set of
   policy-effective fields. The controller only reads `name` and `resourceId` from this list, so the
   drop is transparent; any future resource-by-subdomain lookups must use `fullDomain` instead.
+- **1.25.x new `inference` mode**: resource `mode` enum now includes `"inference"` for AI gateway
+  resources. This controller never creates inference-mode resources; the field is ignored on reads.
+- **1.25.x target ownership**: targets can now belong to an `aiProvider` instead of a `resource`.
+  `deleteTarget` response may omit `resourceId`. Our client ignores the delete response body, so
+  this is transparent.
+- **1.25.x `subnet` DB rename**: the internal DB column `subnet` was renamed to `exitNodeSubnet`
+  for sites, but the Integration API JSON response key remains `"subnet"` — no client change needed.
 - **Target list pagination**: `GET /resource/{id}/targets` still uses `limit`/`offset` (unlike sites/resources),
   matching the existing Go client.
 
