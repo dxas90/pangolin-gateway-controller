@@ -54,8 +54,11 @@ func (s *EnvTestSuite) SetupSuite() {
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd"),
 			filepath.Join(gwapiCRDBase, "standard"),
-			// Experimental CRDs (v1alpha2: TCPRoute, TLSRoute, ...)
-			filepath.Join(gwapiCRDBase, "experimental"),
+			// Experimental CRDs are intentionally omitted: gateway-api ≥ v1.6.3
+			// includes XBackend CRDs that use CEL format functions requiring k8s
+			// 1.33+, which is incompatible with the k8s 1.31 envtest target.
+			// All types used by this project (TCPRoute, GRPCRoute, etc.) are
+			// now in the standard bundle.
 		},
 		ErrorIfCRDPathMissing: false,
 	}
